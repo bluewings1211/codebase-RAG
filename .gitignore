@@ -34,7 +34,7 @@ hive-mind-prompt-*.txt
 
 # Phase 1 completion reports (temporary files)
 *PHASE1*.md
-*COMPLETION*.md  
+*COMPLETION*.md
 *QA_VALIDATION*.md
 *DEPENDENCY_UPDATE*.md
 *RUNTIME_RELIABILITY*.md
