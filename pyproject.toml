@@ -126,3 +126,6 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 # Enable docstring code formatting
 docstring-code-format = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

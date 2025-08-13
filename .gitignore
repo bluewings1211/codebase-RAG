@@ -49,3 +49,10 @@ validate_runtime_fixes.py
 # Temporary development files
 .roo/
 .roomodes
+
+# Test framework generated files
+.test/
+
+# Local service data and logs
+qdrant_data/
+qdrant.log

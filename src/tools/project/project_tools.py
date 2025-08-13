@@ -294,7 +294,7 @@ def list_indexed_projects() -> dict[str, Any]:
         except Exception as e:
             error_msg = f"Failed to list indexed projects: {str(e)}"
             logger.error(error_msg)
-            raise ProjectError(error_msg) from e
+            raise ProjectError(error_msg, project_path="all") from e
 
 
 def clear_project_data(project_name: str | None = None, directory: str = ".") -> dict[str, Any]:
