@@ -6,18 +6,17 @@ learn from past performance, and provide intelligent recommendations.
 """
 
 import asyncio
-import logging
-import time
 import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Set
-from dataclasses import dataclass, field
-from collections import defaultdict, Counter
+import logging
 import statistics
+import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
-from ..models.query_features import QueryFeatures, QueryType, QueryComplexity
+from ..models.query_features import QueryComplexity, QueryFeatures, QueryType
 from ..models.routing_decision import RoutingDecision, RoutingHistory
-
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +32,20 @@ class QueryPattern:
     # Pattern characteristics
     frequency: int = 0
     success_rate: float = 0.0
-    average_performance: Dict[str, float] = field(default_factory=dict)
+    average_performance: dict[str, float] = field(default_factory=dict)
 
     # Associated queries
-    example_queries: List[str] = field(default_factory=list)
-    query_hashes: Set[str] = field(default_factory=set)
+    example_queries: list[str] = field(default_factory=list)
+    query_hashes: set[str] = field(default_factory=set)
 
     # Routing preferences
-    preferred_modes: Dict[str, float] = field(default_factory=dict)
-    mode_success_rates: Dict[str, float] = field(default_factory=dict)
+    preferred_modes: dict[str, float] = field(default_factory=dict)
+    mode_success_rates: dict[str, float] = field(default_factory=dict)
 
     # Temporal information
-    first_seen: Optional[datetime] = None
-    last_seen: Optional[datetime] = None
-    peak_usage_hours: List[int] = field(default_factory=list)
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    peak_usage_hours: list[int] = field(default_factory=list)
 
     # Quality metrics
     pattern_strength: float = 0.0  # How well-defined this pattern is
@@ -59,25 +58,25 @@ class HistoryInsights:
 
     # Overall statistics
     total_queries_analyzed: int = 0
-    analysis_time_range: Tuple[datetime, datetime] = field(default_factory=lambda: (datetime.now(), datetime.now()))
+    analysis_time_range: tuple[datetime, datetime] = field(default_factory=lambda: (datetime.now(), datetime.now()))
 
     # Performance insights
     overall_success_rate: float = 0.0
-    mode_performance: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    mode_performance: dict[str, dict[str, float]] = field(default_factory=dict)
     trend_direction: str = "stable"  # improving, degrading, stable
 
     # Pattern insights
-    discovered_patterns: List[QueryPattern] = field(default_factory=list)
+    discovered_patterns: list[QueryPattern] = field(default_factory=list)
     pattern_coverage: float = 0.0  # Percentage of queries matching patterns
 
     # Routing insights
-    routing_effectiveness: Dict[str, float] = field(default_factory=dict)
+    routing_effectiveness: dict[str, float] = field(default_factory=dict)
     misrouting_rate: float = 0.0
-    routing_recommendations: List[str] = field(default_factory=list)
+    routing_recommendations: list[str] = field(default_factory=list)
 
     # Temporal insights
-    usage_patterns: Dict[str, Any] = field(default_factory=dict)
-    seasonal_trends: Dict[str, float] = field(default_factory=dict)
+    usage_patterns: dict[str, Any] = field(default_factory=dict)
+    seasonal_trends: dict[str, float] = field(default_factory=dict)
 
     # Quality and confidence
     analysis_confidence: float = 0.0
@@ -94,8 +93,8 @@ class QueryHistoryAnalyzer:
         self.logger = logging.getLogger(__name__)
 
         # History storage (in production, this would use persistent storage)
-        self.query_histories: Dict[str, RoutingHistory] = {}
-        self.analysis_cache: Dict[str, Tuple[HistoryInsights, datetime]] = {}
+        self.query_histories: dict[str, RoutingHistory] = {}
+        self.analysis_cache: dict[str, tuple[HistoryInsights, datetime]] = {}
 
         # Pattern discovery configuration
         self.pattern_config = {
@@ -165,7 +164,7 @@ class QueryHistoryAnalyzer:
             self.logger.error(f"Error in query history analysis: {e}")
             return HistoryInsights(analysis_confidence=0.0, data_completeness=0.0)
 
-    def _filter_histories_by_date(self, start_date: datetime, end_date: datetime) -> List[RoutingHistory]:
+    def _filter_histories_by_date(self, start_date: datetime, end_date: datetime) -> list[RoutingHistory]:
         """Filter query histories by date range."""
         relevant_histories = []
 
@@ -178,7 +177,7 @@ class QueryHistoryAnalyzer:
         return relevant_histories
 
     async def _perform_comprehensive_analysis(
-        self, histories: List[RoutingHistory], start_date: datetime, end_date: datetime
+        self, histories: list[RoutingHistory], start_date: datetime, end_date: datetime
     ) -> HistoryInsights:
         """Perform comprehensive analysis of filtered histories."""
         insights = HistoryInsights(
@@ -205,7 +204,7 @@ class QueryHistoryAnalyzer:
 
         return insights
 
-    async def _analyze_overall_performance(self, histories: List[RoutingHistory], insights: HistoryInsights) -> None:
+    async def _analyze_overall_performance(self, histories: list[RoutingHistory], insights: HistoryInsights) -> None:
         """Analyze overall system performance from history."""
         all_success_rates = []
         mode_performance = defaultdict(lambda: {"successes": 0, "total": 0, "latencies": []})
@@ -245,7 +244,7 @@ class QueryHistoryAnalyzer:
         # Determine trend direction
         insights.trend_direction = self._calculate_trend_direction(histories)
 
-    def _calculate_trend_direction(self, histories: List[RoutingHistory]) -> str:
+    def _calculate_trend_direction(self, histories: list[RoutingHistory]) -> str:
         """Calculate whether performance is improving, degrading, or stable."""
         # Simple trend analysis based on recent vs older performance
         recent_performances = []
@@ -279,7 +278,7 @@ class QueryHistoryAnalyzer:
     # Factory function
     _history_analyzer_instance = None
 
-    def get_query_history_analyzer() -> QueryHistoryAnalyzer:
+    def get_query_history_analyzer() -> "QueryHistoryAnalyzer":
         """Get or create a QueryHistoryAnalyzer instance."""
         global _history_analyzer_instance
         if _history_analyzer_instance is None:

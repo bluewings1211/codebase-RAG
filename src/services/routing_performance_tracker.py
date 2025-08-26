@@ -6,19 +6,18 @@ measuring accuracy, effectiveness, and providing comprehensive analytics.
 """
 
 import asyncio
-import logging
-import time
 import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Set
-from dataclasses import dataclass, field
-from collections import defaultdict, deque
+import logging
 import statistics
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Optional
 
-from ..models.routing_decision import RoutingDecision, RoutingMetrics
 from ..models.query_features import QueryFeatures
-
+from ..models.routing_decision import RoutingDecision, RoutingMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -55,31 +54,31 @@ class PerformanceEvent:
     routing_decision: RoutingDecision
 
     # Actual performance results
-    actual_latency_ms: Optional[float] = None
-    actual_success: Optional[bool] = None
-    actual_result_count: Optional[int] = None
-    actual_accuracy_score: Optional[float] = None
-    actual_user_satisfaction: Optional[float] = None
+    actual_latency_ms: float | None = None
+    actual_success: bool | None = None
+    actual_result_count: int | None = None
+    actual_accuracy_score: float | None = None
+    actual_user_satisfaction: float | None = None
 
     # Resource usage
-    cpu_usage_percent: Optional[float] = None
-    memory_usage_mb: Optional[float] = None
-    io_operations: Optional[int] = None
-    network_requests: Optional[int] = None
+    cpu_usage_percent: float | None = None
+    memory_usage_mb: float | None = None
+    io_operations: int | None = None
+    network_requests: int | None = None
 
     # Quality metrics
     cache_hit: bool = False
     error_occurred: bool = False
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
+    error_type: str | None = None
+    error_message: str | None = None
 
     # Routing effectiveness
-    routing_accuracy: Optional[float] = None  # How well the routing matched expectations
-    alternative_modes_tried: List[str] = field(default_factory=list)
+    routing_accuracy: float | None = None  # How well the routing matched expectations
+    alternative_modes_tried: list[str] = field(default_factory=list)
     fallback_used: bool = False
 
     # Additional metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -96,33 +95,36 @@ class PerformanceAlert:
     threshold_value: float
 
     # Context information
-    affected_queries: List[str] = field(default_factory=list)
-    affected_modes: List[str] = field(default_factory=list)
+    affected_queries: list[str] = field(default_factory=list)
+    affected_modes: list[str] = field(default_factory=list)
     time_window: str = ""
 
     # Resolution information
     resolved: bool = False
-    resolution_timestamp: Optional[datetime] = None
+    resolution_timestamp: datetime | None = None
     resolution_notes: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert alert to dictionary for serialization."""
         return {
-            'alert_id': self.alert_id,
-            'timestamp': self.timestamp.isoformat(),
-            'severity': self.severity.value,
-            'metric_type': self.metric_type.value,
-            'message': self.alert_message,
-            'current_value': self.current_value,
-            'threshold_value': self.threshold_value,
-            'affected_queries': len(self.affected_queries),
-            'affected_modes': self.affected_modes,
-            'time_window': self.time_window,
-            'resolved': self.resolved}
+            "alert_id": self.alert_id,
+            "timestamp": self.timestamp.isoformat(),
+            "severity": self.severity.value,
+            "metric_type": self.metric_type.value,
+            "message": self.alert_message,
+            "current_value": self.current_value,
+            "threshold_value": self.threshold_value,
+            "affected_queries": len(self.affected_queries),
+            "affected_modes": self.affected_modes,
+            "time_window": self.time_window,
+            "resolved": self.resolved,
+        }
+
 
 @dataclass
 class PerformanceMetric(Enum):
     """Performance metrics for tracking."""
+
     LATENCY = "latency"
     SUCCESS_RATE = "success_rate"
     ACCURACY = "accuracy"
@@ -133,111 +135,38 @@ class PerformanceMetric(Enum):
 
 class AlertSeverity(Enum):
     """Alert severity levels."""
+
     WARNING = "warning"
     ERROR = "error"
     CRITICAL = "critical"
 
 
 @dataclass
-class PerformanceEvent:
-    """Represents a tracked performance event."""
-    event_id: str
-    timestamp: datetime
-    query_hash: str
-    routing_decision: Any  # RoutingDecision type
-    
-    # Actual performance metrics
-    actual_latency_ms: Optional[float] = None
-    actual_success: Optional[bool] = None
-    actual_result_count: Optional[int] = None
-    actual_accuracy_score: Optional[float] = None
-    actual_user_satisfaction: Optional[float] = None
-    
-    # Resource usage
-    cpu_usage_percent: Optional[float] = None
-    memory_usage_mb: Optional[float] = None
-    io_operations: Optional[int] = None
-    network_requests: Optional[int] = None
-    
-    # Error tracking
-    error_occurred: bool = False
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    
-    # Caching and fallback info
-    cache_hit: bool = False
-    fallback_used: bool = False
-    alternative_modes_tried: List[str] = field(default_factory=list)
-    
-    # Calculated metrics
-    routing_accuracy: Optional[float] = None
-    
-    # Additional metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class PerformanceAlert:
-    """Represents a performance alert."""
-    alert_id: str
-    timestamp: datetime
-    severity: AlertSeverity
-    metric_type: PerformanceMetric
-    alert_message: str
-    current_value: float
-    threshold_value: float
-    affected_queries: List[str] = field(default_factory=list)
-    affected_modes: List[str] = field(default_factory=list)
-    time_window: str = "last_5_minutes"
-    resolved: bool = False
-    resolution_timestamp: Optional[datetime] = None
-    resolution_notes: str = ""
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert alert to dictionary format."""
-        return {
-            'alert_id': self.alert_id,
-            'timestamp': self.timestamp.isoformat(),
-            'severity': self.severity.value,
-            'metric_type': self.metric_type.value,
-            'alert_message': self.alert_message,
-            'current_value': self.current_value,
-            'threshold_value': self.threshold_value,
-            'affected_queries': self.affected_queries,
-            'affected_modes': self.affected_modes,
-            'time_window': self.time_window,
-            'resolved': self.resolved,
-            'resolution_timestamp': self.resolution_timestamp.isoformat() if self.resolution_timestamp else None,
-            'resolution_notes': self.resolution_notes
-        }
-
-
-@dataclass
 class PerformanceDashboard:
     """Real-time performance dashboard data."""
-    
+
     # Current system status
     overall_health_score: float = 1.0  # 0.0 = critical, 1.0 = excellent
     active_alerts_count: int = 0
-    
+
     # Real-time metrics (last 5 minutes)
-    realtime_metrics: Dict[str, float] = field(default_factory=dict)
-    
+    realtime_metrics: dict[str, float] = field(default_factory=dict)
+
     # Historical trends (last 24 hours)
-    trend_metrics: Dict[str, List[float]] = field(default_factory=dict)
-    
+    trend_metrics: dict[str, list[float]] = field(default_factory=dict)
+
     # Mode-specific performance
-    mode_performance: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    
+    mode_performance: dict[str, dict[str, float]] = field(default_factory=dict)
+
     # Top issues and recommendations
-    top_issues: List[str] = field(default_factory=list)
-    recommendations: List[str] = field(default_factory=list)
-    
+    top_issues: list[str] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)
+
     # System statistics
     total_queries_processed: int = 0
     total_routing_decisions: int = 0
     average_response_time_ms: float = 0.0
-    
+
     # Update timestamp
     last_updated: datetime = field(default_factory=datetime.now)
 
@@ -247,120 +176,103 @@ class RoutingPerformanceTracker:
     Comprehensive performance tracking system for monitoring routing decisions,
     measuring effectiveness, and providing real-time analytics.
     """
-    
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        
+
         # Performance data storage
         self.performance_events: deque = deque(maxlen=10000)  # Recent events
-        self.active_alerts: Dict[str, PerformanceAlert] = {}
-        
+        self.active_alerts: dict[str, PerformanceAlert] = {}
+
         # Metrics tracking
-        self.metrics_history: Dict[PerformanceMetric, deque] = {
-            metric: deque(maxlen=1440)  # 24 hours of minute-by-minute data
-            for metric in PerformanceMetric
+        self.metrics_history: dict[PerformanceMetric, deque] = {
+            metric: deque(maxlen=1440)
+            for metric in PerformanceMetric  # 24 hours of minute-by-minute data
         }
-        
+
         # Real-time aggregation windows
         self.realtime_window = deque(maxlen=300)  # 5 minutes
         self.short_term_window = deque(maxlen=1800)  # 30 minutes
         self.long_term_window = deque(maxlen=7200)  # 2 hours
-        
+
         # Performance thresholds
         self.alert_thresholds = {
-            PerformanceMetric.LATENCY: {
-                'warning': 2000.0,  # 2 seconds
-                'error': 5000.0,    # 5 seconds
-                'critical': 10000.0  # 10 seconds
-            },
-            PerformanceMetric.SUCCESS_RATE: {
-                'warning': 0.85,    # 85%
-                'error': 0.70,      # 70%
-                'critical': 0.50    # 50%
-            },
-            PerformanceMetric.ERROR_RATE: {
-                'warning': 0.05,    # 5%
-                'error': 0.15,      # 15%
-                'critical': 0.30    # 30%
-            },
-            PerformanceMetric.RESOURCE_USAGE: {
-                'warning': 0.70,    # 70%
-                'error': 0.85,      # 85%
-                'critical': 0.95    # 95%
-            }
+            PerformanceMetric.LATENCY: {"warning": 2000.0, "error": 5000.0, "critical": 10000.0},  # 2 seconds  # 5 seconds  # 10 seconds
+            PerformanceMetric.SUCCESS_RATE: {"warning": 0.85, "error": 0.70, "critical": 0.50},  # 85%  # 70%  # 50%
+            PerformanceMetric.ERROR_RATE: {"warning": 0.05, "error": 0.15, "critical": 0.30},  # 5%  # 15%  # 30%
+            PerformanceMetric.RESOURCE_USAGE: {"warning": 0.70, "error": 0.85, "critical": 0.95},  # 70%  # 85%  # 95%
         }
-        
+
         # Tracking statistics
         self.tracking_stats = {
-            'total_events_tracked': 0,
-            'alerts_generated': 0,
-            'average_tracking_overhead_ms': 0.0,
-            'data_retention_days': 7
+            "total_events_tracked": 0,
+            "alerts_generated": 0,
+            "average_tracking_overhead_ms": 0.0,
+            "data_retention_days": 7,
         }
-        
+
         # Performance baseline (learned from historical data)
-        self.performance_baselines: Dict[str, Dict[str, float]] = {
-            'local': {'expected_latency_ms': 500, 'expected_success_rate': 0.85},
-            'global': {'expected_latency_ms': 1200, 'expected_success_rate': 0.80},
-            'hybrid': {'expected_latency_ms': 800, 'expected_success_rate': 0.82},
-            'mix': {'expected_latency_ms': 1500, 'expected_success_rate': 0.87}
+        self.performance_baselines: dict[str, dict[str, float]] = {
+            "local": {"expected_latency_ms": 500, "expected_success_rate": 0.85},
+            "global": {"expected_latency_ms": 1200, "expected_success_rate": 0.80},
+            "hybrid": {"expected_latency_ms": 800, "expected_success_rate": 0.82},
+            "mix": {"expected_latency_ms": 1500, "expected_success_rate": 0.87},
         }
-    
-    async def track_routing_performance(self, query_hash: str, routing_decision: Any,
-                                      actual_results: Dict[str, Any]) -> PerformanceEvent:
+
+    async def track_routing_performance(self, query_hash: str, routing_decision: Any, actual_results: dict[str, Any]) -> PerformanceEvent:
         """
         Track the performance of a routing decision with actual results.
-        
+
         Args:
             query_hash: Unique identifier for the query
             routing_decision: The routing decision that was made
             actual_results: Actual performance results from execution
-            
+
         Returns:
             PerformanceEvent with tracked metrics
         """
         start_time = time.time()
-        
+
         try:
             self.logger.debug(f"Tracking performance for query: {query_hash}")
-            
+
             # Create performance event
             event = PerformanceEvent(
                 event_id=f"{query_hash}_{int(time.time())}",
                 timestamp=datetime.now(),
                 query_hash=query_hash,
-                routing_decision=routing_decision
+                routing_decision=routing_decision,
             )
-            
+
             # Extract actual performance metrics
             self._extract_performance_metrics(event, actual_results)
-            
+
             # Calculate routing effectiveness
             self._calculate_routing_effectiveness(event)
-            
+
             # Store the event
             self.performance_events.append(event)
             self._update_realtime_windows(event)
-            
+
             # Update aggregated metrics
             await self._update_aggregated_metrics(event)
-            
+
             # Check for performance alerts
             await self._check_performance_alerts(event)
-            
+
             # Update tracking statistics
             tracking_time_ms = (time.time() - start_time) * 1000
             self._update_tracking_stats(tracking_time_ms)
-            
+
             self.logger.debug(
                 f"Performance tracking complete for {query_hash}: "
                 f"latency={event.actual_latency_ms}ms, "
                 f"success={event.actual_success}, "
                 f"routing_accuracy={event.routing_accuracy:.2f}"
             )
-            
+
             return event
-            
+
         except Exception as e:
             self.logger.error(f"Error tracking routing performance: {e}")
             # Return minimal event on error
@@ -370,204 +282,179 @@ class RoutingPerformanceTracker:
                 query_hash=query_hash,
                 routing_decision=routing_decision,
                 error_occurred=True,
-                error_message=str(e)
+                error_message=str(e),
             )
-    
-    def _extract_performance_metrics(self, event: PerformanceEvent, actual_results: Dict[str, Any]) -> None:
+
+    def _extract_performance_metrics(self, event: PerformanceEvent, actual_results: dict[str, Any]) -> None:
         """Extract performance metrics from actual results."""
         # Extract basic performance metrics
-        event.actual_latency_ms = actual_results.get('latency_ms', 0.0)
-        event.actual_success = actual_results.get('success', False)
-        event.actual_result_count = actual_results.get('result_count', 0)
-        event.actual_accuracy_score = actual_results.get('accuracy_score', 0.0)
-        event.actual_user_satisfaction = actual_results.get('user_satisfaction', 0.0)
-        
+        event.actual_latency_ms = actual_results.get("latency_ms", 0.0)
+        event.actual_success = actual_results.get("success", False)
+        event.actual_result_count = actual_results.get("result_count", 0)
+        event.actual_accuracy_score = actual_results.get("accuracy_score", 0.0)
+        event.actual_user_satisfaction = actual_results.get("user_satisfaction", 0.0)
+
         # Extract resource usage metrics
-        resource_usage = actual_results.get('resource_usage', {})
-        event.cpu_usage_percent = resource_usage.get('cpu_percent', 0.0)
-        event.memory_usage_mb = resource_usage.get('memory_mb', 0.0)
-        event.io_operations = resource_usage.get('io_operations', 0)
-        event.network_requests = resource_usage.get('network_requests', 0)
-        
+        resource_usage = actual_results.get("resource_usage", {})
+        event.cpu_usage_percent = resource_usage.get("cpu_percent", 0.0)
+        event.memory_usage_mb = resource_usage.get("memory_mb", 0.0)
+        event.io_operations = resource_usage.get("io_operations", 0)
+        event.network_requests = resource_usage.get("network_requests", 0)
+
         # Extract error information
-        if 'error' in actual_results:
+        if "error" in actual_results:
             event.error_occurred = True
-            event.error_type = actual_results.get('error_type', 'unknown')
-            event.error_message = actual_results.get('error_message', '')
-        
+            event.error_type = actual_results.get("error_type", "unknown")
+            event.error_message = actual_results.get("error_message", "")
+
         # Extract caching information
-        event.cache_hit = actual_results.get('cache_hit', False)
-        
+        event.cache_hit = actual_results.get("cache_hit", False)
+
         # Extract fallback information
-        event.fallback_used = actual_results.get('fallback_used', False)
-        event.alternative_modes_tried = actual_results.get('alternative_modes_tried', [])
-        
+        event.fallback_used = actual_results.get("fallback_used", False)
+        event.alternative_modes_tried = actual_results.get("alternative_modes_tried", [])
+
         # Store additional metadata
-        event.metadata = actual_results.get('metadata', {})
-    
+        event.metadata = actual_results.get("metadata", {})
+
     def _calculate_routing_effectiveness(self, event: PerformanceEvent) -> None:
         """Calculate how effectively the routing decision performed."""
         decision = event.routing_decision
-        mode = getattr(decision, 'selected_mode', 'unknown')
-        
+        mode = getattr(decision, "selected_mode", "unknown")
+
         # Get expected performance for this mode
-        expected_performance = getattr(decision, 'performance_metrics', None)
+        expected_performance = getattr(decision, "performance_metrics", None)
         baseline = self.performance_baselines.get(mode, {})
-        
+
         effectiveness_factors = []
-        
+
         # Latency effectiveness
         if event.actual_latency_ms is not None:
-            expected_latency = (getattr(expected_performance, 'expected_latency_ms', None) 
-                              if expected_performance else None) or baseline.get('expected_latency_ms', 1000)
+            expected_latency = (
+                getattr(expected_performance, "expected_latency_ms", None) if expected_performance else None
+            ) or baseline.get("expected_latency_ms", 1000)
             if expected_latency > 0:
                 latency_ratio = min(expected_latency / max(event.actual_latency_ms, 1), 2.0)
                 effectiveness_factors.append(latency_ratio)
-        
+
         # Success rate effectiveness
         if event.actual_success is not None:
-            expected_success = (getattr(expected_performance, 'expected_accuracy', None) 
-                              if expected_performance else None) or baseline.get('expected_success_rate', 0.8)
+            expected_success = (getattr(expected_performance, "expected_accuracy", None) if expected_performance else None) or baseline.get(
+                "expected_success_rate", 0.8
+            )
             success_score = 1.0 if event.actual_success else 0.0
             success_effectiveness = success_score / max(expected_success, 0.1)
             effectiveness_factors.append(success_effectiveness)
-        
+
         # Confidence alignment (did high confidence lead to good results?)
         confidence_alignment = 1.0
-        selection_confidence = getattr(decision, 'selection_confidence', 0.5)
+        selection_confidence = getattr(decision, "selection_confidence", 0.5)
         if event.actual_success is not None:
             if selection_confidence > 0.8 and not event.actual_success:
                 confidence_alignment = 0.3  # High confidence but failed
             elif selection_confidence < 0.5 and event.actual_success:
                 confidence_alignment = 0.7  # Low confidence but succeeded
-        
+
         effectiveness_factors.append(confidence_alignment)
-        
+
         # Resource efficiency
-        cpu_intensity = (getattr(expected_performance, 'cpu_intensity', None) 
-                        if expected_performance else None) or 0.5
+        cpu_intensity = (getattr(expected_performance, "cpu_intensity", None) if expected_performance else None) or 0.5
         if event.cpu_usage_percent is not None:
             cpu_efficiency = min(cpu_intensity / max(event.cpu_usage_percent / 100, 0.01), 2.0)
             effectiveness_factors.append(cpu_efficiency)
-        
+
         # Calculate overall routing accuracy
         if effectiveness_factors:
             event.routing_accuracy = statistics.mean(effectiveness_factors)
             event.routing_accuracy = min(max(event.routing_accuracy, 0.0), 2.0)  # Cap at 2.0
         else:
             event.routing_accuracy = 0.5  # Neutral if no factors available
-    
+
     def _update_realtime_windows(self, event: PerformanceEvent) -> None:
         """Update real-time aggregation windows with new event."""
         self.realtime_window.append(event)
         self.short_term_window.append(event)
         self.long_term_window.append(event)
-    
+
     async def _update_aggregated_metrics(self, event: PerformanceEvent) -> None:
         """Update aggregated performance metrics."""
         current_minute = datetime.now().replace(second=0, microsecond=0)
-        
+
         # Update latency metrics
         if event.actual_latency_ms is not None:
-            self.metrics_history[PerformanceMetric.LATENCY].append(
-                (current_minute, event.actual_latency_ms)
-            )
-        
+            self.metrics_history[PerformanceMetric.LATENCY].append((current_minute, event.actual_latency_ms))
+
         # Update success rate (aggregate over time windows)
         success_value = 1.0 if event.actual_success else 0.0
-        self.metrics_history[PerformanceMetric.SUCCESS_RATE].append(
-            (current_minute, success_value)
-        )
-        
+        self.metrics_history[PerformanceMetric.SUCCESS_RATE].append((current_minute, success_value))
+
         # Update accuracy metrics
         if event.routing_accuracy is not None:
-            self.metrics_history[PerformanceMetric.ACCURACY].append(
-                (current_minute, event.routing_accuracy)
-            )
-        
+            self.metrics_history[PerformanceMetric.ACCURACY].append((current_minute, event.routing_accuracy))
+
         # Update error rate
         error_value = 1.0 if event.error_occurred else 0.0
-        self.metrics_history[PerformanceMetric.ERROR_RATE].append(
-            (current_minute, error_value)
-        )
-        
+        self.metrics_history[PerformanceMetric.ERROR_RATE].append((current_minute, error_value))
+
         # Update resource usage
         if event.cpu_usage_percent is not None:
-            self.metrics_history[PerformanceMetric.RESOURCE_USAGE].append(
-                (current_minute, event.cpu_usage_percent / 100.0)
-            )
-        
+            self.metrics_history[PerformanceMetric.RESOURCE_USAGE].append((current_minute, event.cpu_usage_percent / 100.0))
+
         # Update cache hit rate
         cache_value = 1.0 if event.cache_hit else 0.0
-        self.metrics_history[PerformanceMetric.CACHE_HIT_RATE].append(
-            (current_minute, cache_value)
-        )
-    
+        self.metrics_history[PerformanceMetric.CACHE_HIT_RATE].append((current_minute, cache_value))
+
     async def _check_performance_alerts(self, event: PerformanceEvent) -> None:
         """Check if performance metrics trigger any alerts."""
         # Check latency alerts
         if event.actual_latency_ms is not None:
-            await self._check_metric_alert(
-                PerformanceMetric.LATENCY,
-                event.actual_latency_ms,
-                event,
-                higher_is_worse=True
-            )
-        
+            await self._check_metric_alert(PerformanceMetric.LATENCY, event.actual_latency_ms, event, higher_is_worse=True)
+
         # Check success rate alerts (based on recent window)
         recent_success_rate = self._calculate_recent_success_rate()
         if recent_success_rate is not None:
-            await self._check_metric_alert(
-                PerformanceMetric.SUCCESS_RATE,
-                recent_success_rate,
-                event,
-                higher_is_worse=False
-            )
-        
+            await self._check_metric_alert(PerformanceMetric.SUCCESS_RATE, recent_success_rate, event, higher_is_worse=False)
+
         # Check error rate alerts
         recent_error_rate = self._calculate_recent_error_rate()
         if recent_error_rate is not None:
-            await self._check_metric_alert(
-                PerformanceMetric.ERROR_RATE,
-                recent_error_rate,
-                event,
-                higher_is_worse=True
-            )
-    
-    async def _check_metric_alert(self, metric_type: PerformanceMetric, current_value: float,
-                                event: PerformanceEvent, higher_is_worse: bool = True) -> None:
+            await self._check_metric_alert(PerformanceMetric.ERROR_RATE, recent_error_rate, event, higher_is_worse=True)
+
+    async def _check_metric_alert(
+        self, metric_type: PerformanceMetric, current_value: float, event: PerformanceEvent, higher_is_worse: bool = True
+    ) -> None:
         """Check if a specific metric triggers an alert."""
         thresholds = self.alert_thresholds.get(metric_type, {})
-        
+
         severity = None
         threshold_value = None
-        
+
         # Determine alert severity
         if higher_is_worse:
-            if current_value >= thresholds.get('critical', float('inf')):
+            if current_value >= thresholds.get("critical", float("inf")):
                 severity = AlertSeverity.CRITICAL
-                threshold_value = thresholds['critical']
-            elif current_value >= thresholds.get('error', float('inf')):
+                threshold_value = thresholds["critical"]
+            elif current_value >= thresholds.get("error", float("inf")):
                 severity = AlertSeverity.ERROR
-                threshold_value = thresholds['error']
-            elif current_value >= thresholds.get('warning', float('inf')):
+                threshold_value = thresholds["error"]
+            elif current_value >= thresholds.get("warning", float("inf")):
                 severity = AlertSeverity.WARNING
-                threshold_value = thresholds['warning']
+                threshold_value = thresholds["warning"]
         else:
-            if current_value <= thresholds.get('critical', 0):
+            if current_value <= thresholds.get("critical", 0):
                 severity = AlertSeverity.CRITICAL
-                threshold_value = thresholds['critical']
-            elif current_value <= thresholds.get('error', 0):
+                threshold_value = thresholds["critical"]
+            elif current_value <= thresholds.get("error", 0):
                 severity = AlertSeverity.ERROR
-                threshold_value = thresholds['error']
-            elif current_value <= thresholds.get('warning', 0):
+                threshold_value = thresholds["error"]
+            elif current_value <= thresholds.get("warning", 0):
                 severity = AlertSeverity.WARNING
-                threshold_value = thresholds['warning']
-        
+                threshold_value = thresholds["warning"]
+
         # Generate alert if threshold exceeded
         if severity is not None:
             alert_id = f"{metric_type.value}_{severity.value}_{int(time.time())}"
-            
+
             alert = PerformanceAlert(
                 alert_id=alert_id,
                 timestamp=datetime.now(),
@@ -577,286 +464,276 @@ class RoutingPerformanceTracker:
                 current_value=current_value,
                 threshold_value=threshold_value,
                 affected_queries=[event.query_hash],
-                affected_modes=[getattr(event.routing_decision, 'selected_mode', 'unknown')],
-                time_window="last_5_minutes"
+                affected_modes=[getattr(event.routing_decision, "selected_mode", "unknown")],
+                time_window="last_5_minutes",
             )
-            
+
             self.active_alerts[alert_id] = alert
-            self.tracking_stats['alerts_generated'] += 1
-            
+            self.tracking_stats["alerts_generated"] += 1
+
             self.logger.warning(f"Performance alert generated: {alert.alert_message}")
-    
-    def _calculate_recent_success_rate(self, window_minutes: int = 5) -> Optional[float]:
+
+    def _calculate_recent_success_rate(self, window_minutes: int = 5) -> float | None:
         """Calculate success rate for recent events."""
         cutoff_time = datetime.now() - timedelta(minutes=window_minutes)
         recent_events = [e for e in self.realtime_window if e.timestamp >= cutoff_time]
-        
+
         if not recent_events:
             return None
-        
+
         success_count = sum(1 for e in recent_events if e.actual_success is True)
         return success_count / len(recent_events)
-    
-    def _calculate_recent_error_rate(self, window_minutes: int = 5) -> Optional[float]:
+
+    def _calculate_recent_error_rate(self, window_minutes: int = 5) -> float | None:
         """Calculate error rate for recent events."""
         cutoff_time = datetime.now() - timedelta(minutes=window_minutes)
         recent_events = [e for e in self.realtime_window if e.timestamp >= cutoff_time]
-        
+
         if not recent_events:
             return None
-        
+
         error_count = sum(1 for e in recent_events if e.error_occurred)
         return error_count / len(recent_events)
-    
+
     def _update_tracking_stats(self, tracking_time_ms: float) -> None:
         """Update tracking statistics."""
-        self.tracking_stats['total_events_tracked'] += 1
-        
+        self.tracking_stats["total_events_tracked"] += 1
+
         # Update average tracking overhead
-        total = self.tracking_stats['total_events_tracked']
-        current_avg = self.tracking_stats['average_tracking_overhead_ms']
+        total = self.tracking_stats["total_events_tracked"]
+        current_avg = self.tracking_stats["average_tracking_overhead_ms"]
         new_avg = ((current_avg * (total - 1)) + tracking_time_ms) / total
-        self.tracking_stats['average_tracking_overhead_ms'] = new_avg
-    
+        self.tracking_stats["average_tracking_overhead_ms"] = new_avg
+
     def get_performance_dashboard(self) -> PerformanceDashboard:
         """Generate real-time performance dashboard."""
         dashboard = PerformanceDashboard()
-        
+
         # Calculate overall health score
         dashboard.overall_health_score = self._calculate_health_score()
         dashboard.active_alerts_count = len([a for a in self.active_alerts.values() if not a.resolved])
-        
+
         # Real-time metrics (last 5 minutes)
         dashboard.realtime_metrics = self._get_realtime_metrics()
-        
+
         # Trend metrics (last 24 hours)
         dashboard.trend_metrics = self._get_trend_metrics()
-        
+
         # Mode-specific performance
         dashboard.mode_performance = self._get_mode_performance()
-        
+
         # Top issues and recommendations
         dashboard.top_issues = self._identify_top_issues()
         dashboard.recommendations = self._generate_performance_recommendations()
-        
+
         # System statistics
         dashboard.total_queries_processed = len(self.performance_events)
         dashboard.total_routing_decisions = len(self.performance_events)
         dashboard.average_response_time_ms = self._calculate_average_response_time()
-        
+
         dashboard.last_updated = datetime.now()
-        
+
         return dashboard
-    
+
     def _calculate_health_score(self) -> float:
         """Calculate overall system health score (0.0 - 1.0)."""
         health_factors = []
-        
+
         # Success rate factor
         recent_success_rate = self._calculate_recent_success_rate(30)  # 30 minutes
         if recent_success_rate is not None:
             health_factors.append(recent_success_rate)
-        
+
         # Error rate factor (inverted)
         recent_error_rate = self._calculate_recent_error_rate(30)
         if recent_error_rate is not None:
             health_factors.append(1.0 - recent_error_rate)
-        
+
         # Latency factor
-        recent_latencies = [e.actual_latency_ms for e in self.short_term_window 
-                          if e.actual_latency_ms is not None]
+        recent_latencies = [e.actual_latency_ms for e in self.short_term_window if e.actual_latency_ms is not None]
         if recent_latencies:
             avg_latency = statistics.mean(recent_latencies)
             # Normalize latency (assume 2000ms is acceptable, 5000ms is poor)
             latency_factor = max(0, min(1, (5000 - avg_latency) / (5000 - 2000)))
             health_factors.append(latency_factor)
-        
+
         # Alert severity factor
-        critical_alerts = len([a for a in self.active_alerts.values() 
-                             if a.severity == AlertSeverity.CRITICAL and not a.resolved])
-        error_alerts = len([a for a in self.active_alerts.values() 
-                          if a.severity == AlertSeverity.ERROR and not a.resolved])
-        
+        critical_alerts = len([a for a in self.active_alerts.values() if a.severity == AlertSeverity.CRITICAL and not a.resolved])
+        error_alerts = len([a for a in self.active_alerts.values() if a.severity == AlertSeverity.ERROR and not a.resolved])
+
         alert_factor = 1.0
         if critical_alerts > 0:
             alert_factor = 0.2  # Critical alerts severely impact health
         elif error_alerts > 0:
             alert_factor = 0.6  # Error alerts moderately impact health
-        
+
         health_factors.append(alert_factor)
-        
+
         return statistics.mean(health_factors) if health_factors else 0.5
-    
-    def _get_realtime_metrics(self) -> Dict[str, float]:
+
+    def _get_realtime_metrics(self) -> dict[str, float]:
         """Get real-time metrics for the dashboard."""
         metrics = {}
-        
+
         # Calculate metrics from recent events
         recent_events = list(self.realtime_window)
-        
+
         if recent_events:
             # Average latency
             latencies = [e.actual_latency_ms for e in recent_events if e.actual_latency_ms is not None]
             if latencies:
-                metrics['average_latency_ms'] = statistics.mean(latencies)
-            
+                metrics["average_latency_ms"] = statistics.mean(latencies)
+
             # Success rate
             success_rate = self._calculate_recent_success_rate(5)
             if success_rate is not None:
-                metrics['success_rate'] = success_rate
-            
+                metrics["success_rate"] = success_rate
+
             # Error rate
             error_rate = self._calculate_recent_error_rate(5)
             if error_rate is not None:
-                metrics['error_rate'] = error_rate
-            
+                metrics["error_rate"] = error_rate
+
             # Throughput (queries per minute)
             time_span_minutes = 5
-            metrics['throughput_qpm'] = len(recent_events) / time_span_minutes
-            
+            metrics["throughput_qpm"] = len(recent_events) / time_span_minutes
+
             # Cache hit rate
             cache_hits = sum(1 for e in recent_events if e.cache_hit)
-            metrics['cache_hit_rate'] = cache_hits / len(recent_events)
-            
+            metrics["cache_hit_rate"] = cache_hits / len(recent_events)
+
             # Average routing accuracy
             accuracies = [e.routing_accuracy for e in recent_events if e.routing_accuracy is not None]
             if accuracies:
-                metrics['routing_accuracy'] = statistics.mean(accuracies)
-        
+                metrics["routing_accuracy"] = statistics.mean(accuracies)
+
         return metrics
-    
-    def _get_trend_metrics(self) -> Dict[str, List[float]]:
+
+    def _get_trend_metrics(self) -> dict[str, list[float]]:
         """Get trend metrics for the last 24 hours."""
         trends = {}
-        
+
         # Sample hourly data points for the last 24 hours
         for metric_type in PerformanceMetric:
             if metric_type in self.metrics_history:
                 hourly_values = []
                 current_time = datetime.now()
-                
+
                 for hour_offset in range(24):
-                    hour_start = current_time - timedelta(hours=hour_offset+1)
+                    hour_start = current_time - timedelta(hours=hour_offset + 1)
                     hour_end = current_time - timedelta(hours=hour_offset)
-                    
+
                     # Get values for this hour
-                    hour_values = [value for timestamp, value in self.metrics_history[metric_type]
-                                 if hour_start <= timestamp < hour_end]
-                    
+                    hour_values = [value for timestamp, value in self.metrics_history[metric_type] if hour_start <= timestamp < hour_end]
+
                     if hour_values:
                         hourly_values.append(statistics.mean(hour_values))
                     else:
                         hourly_values.append(0.0)
-                
+
                 trends[metric_type.value] = list(reversed(hourly_values))  # Chronological order
-        
+
         return trends
-    
-    def _get_mode_performance(self) -> Dict[str, Dict[str, float]]:
+
+    def _get_mode_performance(self) -> dict[str, dict[str, float]]:
         """Get performance metrics broken down by routing mode."""
-        mode_stats = defaultdict(lambda: {
-            'latencies': [], 'successes': 0, 'total': 0, 'accuracies': []
-        })
-        
+        mode_stats = defaultdict(lambda: {"latencies": [], "successes": 0, "total": 0, "accuracies": []})
+
         # Aggregate data by mode
         for event in self.short_term_window:
-            mode = getattr(event.routing_decision, 'selected_mode', 'unknown')
-            mode_stats[mode]['total'] += 1
-            
+            mode = getattr(event.routing_decision, "selected_mode", "unknown")
+            mode_stats[mode]["total"] += 1
+
             if event.actual_latency_ms is not None:
-                mode_stats[mode]['latencies'].append(event.actual_latency_ms)
-            
+                mode_stats[mode]["latencies"].append(event.actual_latency_ms)
+
             if event.actual_success:
-                mode_stats[mode]['successes'] += 1
-            
+                mode_stats[mode]["successes"] += 1
+
             if event.routing_accuracy is not None:
-                mode_stats[mode]['accuracies'].append(event.routing_accuracy)
-        
+                mode_stats[mode]["accuracies"].append(event.routing_accuracy)
+
         # Calculate performance metrics
         mode_performance = {}
         for mode, stats in mode_stats.items():
-            if stats['total'] > 0:
+            if stats["total"] > 0:
                 mode_performance[mode] = {
-                    'success_rate': stats['successes'] / stats['total'],
-                    'average_latency_ms': statistics.mean(stats['latencies']) if stats['latencies'] else 0,
-                    'average_accuracy': statistics.mean(stats['accuracies']) if stats['accuracies'] else 0,
-                    'query_count': stats['total']
+                    "success_rate": stats["successes"] / stats["total"],
+                    "average_latency_ms": statistics.mean(stats["latencies"]) if stats["latencies"] else 0,
+                    "average_accuracy": statistics.mean(stats["accuracies"]) if stats["accuracies"] else 0,
+                    "query_count": stats["total"],
                 }
-        
+
         return mode_performance
-    
-    def _identify_top_issues(self) -> List[str]:
+
+    def _identify_top_issues(self) -> list[str]:
         """Identify the top performance issues."""
         issues = []
-        
+
         # Check for high error rate
         error_rate = self._calculate_recent_error_rate(30)
         if error_rate and error_rate > 0.10:
             issues.append(f"High error rate: {error_rate:.1%} in last 30 minutes")
-        
+
         # Check for high latency
-        recent_latencies = [e.actual_latency_ms for e in self.short_term_window 
-                          if e.actual_latency_ms is not None]
+        recent_latencies = [e.actual_latency_ms for e in self.short_term_window if e.actual_latency_ms is not None]
         if recent_latencies:
             avg_latency = statistics.mean(recent_latencies)
             if avg_latency > 3000:
                 issues.append(f"High average latency: {avg_latency:.0f}ms")
-        
+
         # Check for low success rate
         success_rate = self._calculate_recent_success_rate(30)
         if success_rate and success_rate < 0.75:
             issues.append(f"Low success rate: {success_rate:.1%} in last 30 minutes")
-        
+
         # Check for active critical alerts
-        critical_alerts = [a for a in self.active_alerts.values() 
-                         if a.severity == AlertSeverity.CRITICAL and not a.resolved]
+        critical_alerts = [a for a in self.active_alerts.values() if a.severity == AlertSeverity.CRITICAL and not a.resolved]
         if critical_alerts:
             issues.append(f"{len(critical_alerts)} critical alerts active")
-        
+
         return issues[:5]  # Top 5 issues
-    
-    def _generate_performance_recommendations(self) -> List[str]:
+
+    def _generate_performance_recommendations(self) -> list[str]:
         """Generate performance improvement recommendations."""
         recommendations = []
-        
+
         # Analyze mode performance for recommendations
         mode_performance = self._get_mode_performance()
-        
+
         if mode_performance:
             # Find best and worst performing modes
-            best_mode = max(mode_performance.items(), key=lambda x: x[1]['success_rate'])
-            worst_mode = min(mode_performance.items(), key=lambda x: x[1]['success_rate'])
-            
-            if best_mode[1]['success_rate'] - worst_mode[1]['success_rate'] > 0.2:
-                recommendations.append(
-                    f"Consider optimizing {worst_mode[0]} mode - {best_mode[0]} performs {best_mode[1]['success_rate'] - worst_mode[1]['success_rate']:.1%} better"
-                )
-        
+            best_mode = max(mode_performance.items(), key=lambda x: x[1]["success_rate"])
+            worst_mode = min(mode_performance.items(), key=lambda x: x[1]["success_rate"])
+
+            if best_mode[1]["success_rate"] - worst_mode[1]["success_rate"] > 0.2:
+                diff = best_mode[1]["success_rate"] - worst_mode[1]["success_rate"]
+                recommendations.append(f"Consider optimizing {worst_mode[0]} mode - {best_mode[0]} performs {diff:.1%} better")
+
         # Cache performance recommendations
         realtime_metrics = self._get_realtime_metrics()
-        cache_hit_rate = realtime_metrics.get('cache_hit_rate', 0)
+        cache_hit_rate = realtime_metrics.get("cache_hit_rate", 0)
         if cache_hit_rate < 0.3:
             recommendations.append("Low cache hit rate - consider increasing cache size or TTL")
-        
+
         # Latency optimization
-        avg_latency = realtime_metrics.get('average_latency_ms', 0)
+        avg_latency = realtime_metrics.get("average_latency_ms", 0)
         if avg_latency > 2000:
             recommendations.append("High latency detected - investigate query complexity and resource allocation")
-        
+
         # Routing accuracy recommendations
-        routing_accuracy = realtime_metrics.get('routing_accuracy', 1.0)
+        routing_accuracy = realtime_metrics.get("routing_accuracy", 1.0)
         if routing_accuracy < 0.7:
             recommendations.append("Low routing accuracy - consider retraining decision models")
-        
+
         return recommendations[:5]  # Top 5 recommendations
-    
+
     def _calculate_average_response_time(self) -> float:
         """Calculate average response time across all events."""
-        latencies = [e.actual_latency_ms for e in self.performance_events 
-                   if e.actual_latency_ms is not None]
-        
+        latencies = [e.actual_latency_ms for e in self.performance_events if e.actual_latency_ms is not None]
+
         return statistics.mean(latencies) if latencies else 0.0
-    
+
     def resolve_alert(self, alert_id: str, resolution_notes: str = "") -> bool:
         """Mark an alert as resolved."""
         if alert_id in self.active_alerts:
@@ -864,89 +741,85 @@ class RoutingPerformanceTracker:
             alert.resolved = True
             alert.resolution_timestamp = datetime.now()
             alert.resolution_notes = resolution_notes
-            
+
             self.logger.info(f"Alert resolved: {alert_id} - {resolution_notes}")
             return True
-        
+
         return False
-    
-    def get_performance_report(self, hours: int = 24) -> Dict[str, Any]:
+
+    def get_performance_report(self, hours: int = 24) -> dict[str, Any]:
         """Generate comprehensive performance report."""
         cutoff_time = datetime.now() - timedelta(hours=hours)
         relevant_events = [e for e in self.performance_events if e.timestamp >= cutoff_time]
-        
+
         if not relevant_events:
-            return {'error': 'No data available for the specified time period'}
-        
+            return {"error": "No data available for the specified time period"}
+
         # Basic statistics
         total_events = len(relevant_events)
         successful_events = len([e for e in relevant_events if e.actual_success])
         error_events = len([e for e in relevant_events if e.error_occurred])
-        
+
         # Performance metrics
         latencies = [e.actual_latency_ms for e in relevant_events if e.actual_latency_ms is not None]
         accuracies = [e.routing_accuracy for e in relevant_events if e.routing_accuracy is not None]
-        
+
         report = {
-            'time_period': f"Last {hours} hours",
-            'summary': {
-                'total_queries': total_events,
-                'success_rate': successful_events / total_events if total_events > 0 else 0,
-                'error_rate': error_events / total_events if total_events > 0 else 0,
-                'average_latency_ms': statistics.mean(latencies) if latencies else 0,
-                'average_routing_accuracy': statistics.mean(accuracies) if accuracies else 0
+            "time_period": f"Last {hours} hours",
+            "summary": {
+                "total_queries": total_events,
+                "success_rate": successful_events / total_events if total_events > 0 else 0,
+                "error_rate": error_events / total_events if total_events > 0 else 0,
+                "average_latency_ms": statistics.mean(latencies) if latencies else 0,
+                "average_routing_accuracy": statistics.mean(accuracies) if accuracies else 0,
             },
-            'mode_breakdown': self._get_mode_performance(),
-            'performance_trends': self._get_trend_metrics(),
-            'active_alerts': [alert.to_dict() for alert in self.active_alerts.values() if not alert.resolved],
-            'top_issues': self._identify_top_issues(),
-            'recommendations': self._generate_performance_recommendations(),
-            'system_health_score': self._calculate_health_score()
+            "mode_breakdown": self._get_mode_performance(),
+            "performance_trends": self._get_trend_metrics(),
+            "active_alerts": [alert.to_dict() for alert in self.active_alerts.values() if not alert.resolved],
+            "top_issues": self._identify_top_issues(),
+            "recommendations": self._generate_performance_recommendations(),
+            "system_health_score": self._calculate_health_score(),
         }
-        
+
         return report
-    
-    def get_tracking_statistics(self) -> Dict[str, Any]:
+
+    def get_tracking_statistics(self) -> dict[str, Any]:
         """Get current tracking statistics."""
         return {
             **self.tracking_stats,
-            'active_alerts': len([a for a in self.active_alerts.values() if not a.resolved]),
-            'total_alerts': len(self.active_alerts),
-            'events_in_memory': len(self.performance_events),
-            'realtime_window_size': len(self.realtime_window),
-            'data_retention_hours': self.tracking_stats['data_retention_days'] * 24
+            "active_alerts": len([a for a in self.active_alerts.values() if not a.resolved]),
+            "total_alerts": len(self.active_alerts),
+            "events_in_memory": len(self.performance_events),
+            "realtime_window_size": len(self.realtime_window),
+            "data_retention_hours": self.tracking_stats["data_retention_days"] * 24,
         }
-    
+
     def cleanup_old_data(self, hours_to_keep: int = 168) -> None:  # 1 week default
         """Clean up old performance data to manage memory usage."""
         cutoff_time = datetime.now() - timedelta(hours=hours_to_keep)
-        
+
         # Clean up performance events
-        original_count = len(self.performance_events)
         # Note: deque doesn't support filtering, so we'd need to recreate it
         # For now, rely on maxlen parameter to automatically manage size
-        
+
         # Clean up resolved alerts older than cutoff
         alerts_to_remove = []
         for alert_id, alert in self.active_alerts.items():
             if alert.resolved and alert.resolution_timestamp and alert.resolution_timestamp < cutoff_time:
                 alerts_to_remove.append(alert_id)
-        
+
         for alert_id in alerts_to_remove:
             del self.active_alerts[alert_id]
-        
+
         # Clean up metrics history
         for metric_type in self.metrics_history:
             # Filter out old entries
             self.metrics_history[metric_type] = deque(
-                [(timestamp, value) for timestamp, value in self.metrics_history[metric_type]
-                 if timestamp >= cutoff_time],
-                maxlen=self.metrics_history[metric_type].maxlen
+                [(timestamp, value) for timestamp, value in self.metrics_history[metric_type] if timestamp >= cutoff_time],
+                maxlen=self.metrics_history[metric_type].maxlen,
             )
-        
-        self.logger.info(
-            f"Cleaned up old performance data: removed {len(alerts_to_remove)} old alerts"
-        )
+
+        self.logger.info(f"Cleaned up old performance data: removed {len(alerts_to_remove)} old alerts")
 
 
 # Factory function

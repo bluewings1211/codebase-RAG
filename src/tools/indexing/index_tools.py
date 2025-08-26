@@ -10,7 +10,6 @@ import time
 import traceback
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Generator
-from .async_fix import fix_async_generator_issue
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union
@@ -41,6 +40,8 @@ from src.utils.memory_utils import (
     log_memory_usage,
     should_cleanup_memory,
 )
+
+from .async_fix import fix_async_generator_issue
 
 # Load environment variables
 env_path = Path(__file__).parent.parent.parent.parent / ".env"
