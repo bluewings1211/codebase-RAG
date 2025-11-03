@@ -18,7 +18,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: "3.11"
+        python-version: "3.10"
 
     - name: Install UV and dependencies
       run: |
@@ -45,6 +45,7 @@ jobs:
 
     - name: Run OSV Scanner (Vulnerability Database)
       run: |
+        source .venv/bin/activate
         osv-scanner --format=json --output=osv-report.json . || echo "OSV vulnerabilities found"
 
     - name: Run Bandit (Code Security Analysis)

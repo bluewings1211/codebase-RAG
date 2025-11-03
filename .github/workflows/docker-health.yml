@@ -75,7 +75,7 @@ jobs:
 
           cat > Dockerfile << 'EOF'
           # Multi-stage build for optimal image size
-          FROM python:3.11-slim as builder
+          FROM python:3.10-slim as builder
 
           # Set build arguments
           ARG BUILDPLATFORM
@@ -102,7 +102,7 @@ jobs:
           RUN uv sync --frozen --no-dev
 
           # Production stage
-          FROM python:3.11-slim as production
+          FROM python:3.10-slim as production
 
           # Create non-root user
           RUN groupadd -r appuser && useradd -r -g appuser appuser
