@@ -31,7 +31,12 @@ jobs:
     - name: Install security scanning tools
       run: |
         source .venv/bin/activate
-        pip install pip-audit bandit safety semgrep osv-scanner
+        pip install pip-audit bandit safety semgrep
+        curl -sSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_Linux_x86_64.tar.gz -o osv-scanner.tar.gz
+        tar -xzf osv-scanner.tar.gz osv-scanner
+        chmod +x osv-scanner
+        sudo mv osv-scanner /usr/local/bin/osv-scanner
+        rm -f osv-scanner.tar.gz
 
     - name: Run pip-audit (Dependency Security)
       run: |
