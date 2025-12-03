@@ -5,3 +5,20 @@ indexing_report_*.json
 chunking_metrics.json
 .DS_Store
 trees/
+
+# Log files
+*.log
+logs/
+
+# AI assistant configuration directories
+.claude/
+.cursor/
+.gemini/
+.roo/
+.roomodes
+.taskmaster/
+.windsurf/
+
+# Cache directories
+.pytest_cache/
+.mypy_cache/

@@ -85,10 +85,47 @@ class FileDiscoveryService:
             total_files = analysis_result.get("relevant_files", 0)
             total_size_mb = analysis_result.get("size_analysis", {}).get("total_size_mb", 0)
 
-            # Calculate estimates
+            # For incremental mode, check for actual changes
+            files_to_process = total_files
+            change_summary = None
+
+            if mode == "incremental":
+                try:
+                    from services.change_detector_service import ChangeDetectorService
+                    from services.file_metadata_service import FileMetadataService
+                    from services.qdrant_service import QdrantService
+
+                    # Get project name
+                    project_context = self.project_analysis.get_project_context(directory)
+                    project_name = project_context.get("project_name", "unknown")
+
+                    # Initialize services for change detection
+                    qdrant_service = QdrantService()
+                    metadata_service = FileMetadataService(qdrant_service)
+                    change_detector = ChangeDetectorService(metadata_service)
+
+                    # Get relevant files and detect changes
+                    relevant_files = self.project_analysis.get_relevant_files(directory)
+                    changes = change_detector.detect_changes(
+                        project_name=project_name,
+                        current_files=relevant_files,
+                        project_root=directory,
+                    )
+
+                    # Update files_to_process based on actual changes
+                    files_to_process = len(changes.get_files_to_reindex())
+                    change_summary = changes.get_summary()
+
+                    self.logger.debug(f"Incremental mode: {files_to_process} files need processing")
+
+                except Exception as e:
+                    self.logger.warning(f"Could not perform change detection: {e}")
+                    # Fall back to total files if change detection fails
+
+            # Calculate estimates based on files to process
             base_rate = 100  # files per minute baseline
             size_factor = max(1.0, total_size_mb / 10)  # Adjust for file size
-            estimated_minutes = (total_files / base_rate) * size_factor
+            estimated_minutes = (files_to_process / base_rate) * size_factor if files_to_process > 0 else 0
 
             # Determine recommendation
             if estimated_minutes > 30:
@@ -101,14 +138,20 @@ class FileDiscoveryService:
                 recommendation = "quick_operation"
                 use_manual_tool = False
 
-            return {
-                "file_count": total_files,
+            result = {
+                "file_count": files_to_process,
+                "total_files": total_files,
                 "total_size_mb": total_size_mb,
                 "estimated_minutes": round(estimated_minutes, 1),
                 "recommendation": recommendation,
                 "use_manual_tool_recommended": use_manual_tool,
                 "complexity_analysis": analysis_result.get("indexing_complexity", {}),
             }
+
+            if change_summary:
+                result["change_summary"] = change_summary
+
+            return result
 
         except Exception as e:
             self.logger.error(f"Failed to estimate processing requirements: {e}")

@@ -42,6 +42,15 @@ progress/
 *.xcworkspace/
 *.xcodeproj/
 
+# AI assistant configuration directories
+.claude/
+.cursor/
+.gemini/
+.roo/
+.roomodes
+.taskmaster/
+.windsurf/
+
 # OS-specific files and directories
 .DS_Store
 Thumbs.db

@@ -155,7 +155,8 @@ class ChangeDetectorService:
 
                 # Create metadata for current file
                 metadata = FileMetadata.from_file_path(abs_path, project_root)
-                current_file_metadata[abs_path] = metadata
+                # Use the same path format as metadata for consistency
+                current_file_metadata[metadata.file_path] = metadata
                 valid_current_files.append(abs_path)
 
             except Exception as e:

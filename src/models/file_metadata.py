@@ -18,7 +18,7 @@ class FileMetadata:
     efficient change detection and selective reprocessing.
     """
 
-    file_path: str  # Absolute path to the file
+    file_path: str  # Path to the file (relative to project root if available, otherwise absolute)
     mtime: float  # File modification timestamp (Unix timestamp)
     content_hash: str  # SHA256 hash of file content
     file_size: int  # File size in bytes
@@ -36,11 +36,12 @@ class FileMetadata:
         Create FileMetadata instance by reading file system information.
 
         Args:
-            file_path: Absolute path to the file
+            file_path: Path to the file (can be absolute or relative)
             project_root: Optional project root for relative path calculation
 
         Returns:
-            FileMetadata instance with current file state
+            FileMetadata instance with current file state.
+            The file_path will be relative to project_root if provided, otherwise absolute.
 
         Raises:
             FileNotFoundError: If the file doesn't exist
@@ -68,8 +69,12 @@ class FileMetadata:
                 # File is outside project root
                 relative_path = None
 
+        # Use relative path for file_path if available to match indexing behavior
+        # This ensures consistency with IndexingService._sanitize_file_path()
+        primary_path = relative_path if relative_path else str(path.absolute())
+
         return cls(
-            file_path=str(path.absolute()),
+            file_path=primary_path,
             mtime=mtime,
             content_hash=content_hash,
             file_size=file_size,

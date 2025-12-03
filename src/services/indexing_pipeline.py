@@ -215,8 +215,39 @@ class IndexingPipeline:
             # Remove obsolete entries
             if files_to_remove:
                 self._report_progress(f"Removing {len(files_to_remove)} obsolete entries")
-                # TODO: Implement removal from vector database
-                self.logger.info(f"TODO: Remove {len(files_to_remove)} obsolete files from vector DB")
+
+                # Import deletion function
+                from tools.project.project_utils import delete_file_chunks
+
+                total_removed_points = 0
+                successful_deletions = 0
+
+                for file_path in files_to_remove:
+                    try:
+                        # Delete chunks for this file from all collections
+                        result = delete_file_chunks(file_path)
+
+                        if result.get("error") is None:
+                            deleted_points = result.get("deleted_points", 0)
+                            total_removed_points += deleted_points
+                            successful_deletions += 1
+
+                            if deleted_points > 0:
+                                self.logger.info(f"Removed {deleted_points} points for deleted file: {file_path}")
+                            else:
+                                self.logger.debug(f"No points found for deleted file: {file_path}")
+                        else:
+                            error_msg = result.get("error", "Unknown error")
+                            self.logger.warning(f"Failed to remove file {file_path}: {error_msg}")
+
+                    except Exception as e:
+                        self.logger.error(f"Error removing file {file_path}: {e}")
+                        continue
+
+                self.logger.info(
+                    f"Deletion summary: {successful_deletions}/{len(files_to_remove)} files processed, "
+                    f"{total_removed_points} points removed from vector database"
+                )
 
             # Process changed files
             if files_to_reindex:
@@ -230,9 +261,28 @@ class IndexingPipeline:
                     total_points_stored = points_stored
                     collections_used = collections
 
-            # Update file metadata
+            # Update file metadata for processed files
             self._report_progress("Updating file metadata")
-            self._store_file_metadata(directory, project_name)
+            files_to_update_metadata = files_to_reindex if files_to_reindex else []
+            self._store_file_metadata(directory, project_name, specific_files=files_to_update_metadata)
+
+            # Remove file metadata for deleted files
+            if files_to_remove:
+                self._report_progress("Removing metadata for deleted files")
+
+                try:
+                    # Remove metadata for all deleted files at once
+                    success = self.metadata_service.remove_file_metadata(project_name, files_to_remove)
+
+                    if success:
+                        self.logger.info(f"Successfully removed metadata for {len(files_to_remove)} deleted files")
+                        for file_path in files_to_remove:
+                            self.logger.debug(f"Removed metadata for: {file_path}")
+                    else:
+                        self.logger.warning(f"Failed to remove metadata for {len(files_to_remove)} deleted files")
+
+                except Exception as e:
+                    self.logger.error(f"Error during metadata cleanup: {e}")
 
             processing_time = time.time() - start_time
 
@@ -352,16 +402,28 @@ class IndexingPipeline:
 
         return total_points, collections_used
 
-    def _store_file_metadata(self, directory: str, project_name: str):
-        """Store file metadata for change detection."""
+    def _store_file_metadata(self, directory: str, project_name: str, specific_files: list[str] | None = None):
+        """
+        Store file metadata for change detection.
+
+        Args:
+            directory: Directory being indexed
+            project_name: Name of the project
+            specific_files: Optional list of specific files to store metadata for.
+                           If None, stores metadata for all relevant files.
+        """
         try:
-            relevant_files = self.project_analysis.get_relevant_files(directory)
+            # Use specific files if provided, otherwise get all relevant files
+            if specific_files:
+                files_to_process = specific_files
+            else:
+                files_to_process = self.project_analysis.get_relevant_files(directory)
 
             from models.file_metadata import FileMetadata
 
             metadata_list = []
 
-            for file_path in relevant_files:
+            for file_path in files_to_process:
                 try:
                     metadata = FileMetadata.from_file_path(file_path, directory)
                     metadata_list.append(metadata)
