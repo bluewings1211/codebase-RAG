@@ -497,6 +497,44 @@ def _create_general_metadata_extractor() -> Callable[[dict[str, Any]], dict[str,
     return extractor
 
 
+def filter_collections_by_type(collections: list[str], collection_types: list[str] | None) -> list[str]:
+    """Filter collections based on specified collection types.
+
+    Args:
+        collections: List of all available collection names
+        collection_types: List of collection types to include ("code", "config", "documentation")
+                         None means include all types
+
+    Returns:
+        Filtered list of collection names
+    """
+    if not collection_types:
+        return collections
+
+    # Normalize collection types to lowercase
+    normalized_types = [t.lower() for t in collection_types]
+    filtered_collections = []
+
+    for collection in collections:
+        # Skip metadata collections
+        if collection.endswith("_file_metadata"):
+            continue
+
+        # Check each requested type
+        for collection_type in normalized_types:
+            if collection_type == "code" and collection.endswith("_code"):
+                filtered_collections.append(collection)
+                break
+            elif collection_type == "config" and collection.endswith("_config"):
+                filtered_collections.append(collection)
+                break
+            elif collection_type == "documentation" and collection.endswith("_documentation"):
+                filtered_collections.append(collection)
+                break
+
+    return filtered_collections
+
+
 async def search(
     query: str,
     n_results: int = 5,
@@ -505,6 +543,7 @@ async def search(
     include_context: bool = True,
     context_chunks: int = 1,
     target_projects: list[str] | None = None,
+    collection_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Search indexed content using natural language queries.
@@ -520,6 +559,12 @@ async def search(
         include_context: Whether to include surrounding code context (default: True)
         context_chunks: Number of context chunks to include before/after results (default: 1)
         target_projects: List of specific project names to search in (optional)
+        collection_types: List of collection types to search in (optional)
+                        - ["code"] - Only search source code files
+                        - ["config"] - Only search configuration files (JSON, YAML, TOML, etc.)
+                        - ["documentation"] - Only search documentation files (Markdown, text, etc.)
+                        - ["code", "config"] - Search both code and configuration files
+                        - None - Search all collection types (default behavior)
 
     Returns:
         Dictionary containing search results with metadata, scores, and context
@@ -533,6 +578,7 @@ async def search(
         include_context,
         context_chunks,
         target_projects,
+        collection_types,
     )
 
 
@@ -544,6 +590,7 @@ def search_sync(
     include_context: bool = True,
     context_chunks: int = 1,
     target_projects: list[str] | None = None,
+    collection_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Synchronous implementation of search functionality.
@@ -556,6 +603,11 @@ def search_sync(
         include_context: Whether to include surrounding code context (default: True)
         context_chunks: Number of context chunks to include before/after results (default: 1)
         target_projects: List of specific project names to search in (optional)
+        collection_types: List of collection types to search in (optional)
+                        - ["code"] - Only search source code files
+                        - ["config"] - Only search configuration files
+                        - ["documentation"] - Only search documentation files
+                        - None - Search all collection types (default)
 
     Returns:
         Dictionary containing search results with metadata, scores, and context
@@ -663,6 +715,11 @@ def search_sync(
             else:
                 # Fallback to global collections
                 search_collections = [c for c in all_collections if c.startswith("global_") and not c.endswith("_file_metadata")]
+
+        # Apply collection type filtering if specified
+        if collection_types:
+            search_collections = filter_collections_by_type(search_collections, collection_types)
+            logger.debug(f"Filtered to collection types {collection_types}: {len(search_collections)} collections")
 
         if not search_collections:
             return {

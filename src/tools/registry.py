@@ -94,6 +94,7 @@ def register_tools(mcp_app: FastMCP) -> None:
         include_context: bool = True,
         context_chunks: int = 1,
         target_projects: list[str] = None,
+        collection_types: list[str] = None,
     ):
         """Search indexed content using natural language queries.
 
@@ -108,6 +109,11 @@ def register_tools(mcp_app: FastMCP) -> None:
             include_context: Whether to include surrounding code context (default: True)
             context_chunks: Number of context chunks to include before/after results (0-5, default: 1)
             target_projects: List of specific project names to search in (optional)
+            collection_types: List of collection types to search in (optional)
+                            - ["code"] - Only search source code files
+                            - ["config"] - Only search configuration files
+                            - ["documentation"] - Only search documentation files
+                            - None - Search all collection types (default)
 
         Returns:
             Dictionary containing search results with metadata, scores, and context
@@ -120,6 +126,7 @@ def register_tools(mcp_app: FastMCP) -> None:
             include_context,
             context_chunks,
             target_projects,
+            collection_types,
         )
 
     @mcp_app.tool()
