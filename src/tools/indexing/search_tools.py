@@ -26,6 +26,7 @@ from tools.core.errors import (
     ValidationError,
 )
 from tools.core.retry_utils import retry_operation
+from utils.output_control import filter_search_results
 
 # Load environment variables
 env_path = Path(__file__).parent.parent.parent.parent / ".env"
@@ -544,6 +545,7 @@ async def search(
     context_chunks: int = 1,
     target_projects: list[str] | None = None,
     collection_types: list[str] | None = None,
+    minimal_output: bool | None = None,
 ) -> dict[str, Any]:
     """
     Search indexed content using natural language queries.
@@ -565,12 +567,17 @@ async def search(
                         - ["documentation"] - Only search documentation files (Markdown, text, etc.)
                         - ["code", "config"] - Search both code and configuration files
                         - None - Search all collection types (default behavior)
+        minimal_output: Return simplified output for AI agents (default: controlled by MCP_MINIMAL_OUTPUT env)
+                       - True: Returns only essential fields (file_path, content, line numbers, breadcrumb)
+                       - False: Returns full results with all metadata and scores
+                       - None: Uses MCP_MINIMAL_OUTPUT environment variable (default: true)
 
     Returns:
-        Dictionary containing search results with metadata, scores, and context
+        Dictionary containing search results with metadata, scores, and context.
+        Output verbosity controlled by minimal_output parameter or MCP_MINIMAL_OUTPUT env var.
     """
     # Use the synchronous implementation
-    return search_sync(
+    results = search_sync(
         query,
         n_results,
         cross_project,
@@ -580,6 +587,8 @@ async def search(
         target_projects,
         collection_types,
     )
+    # Apply output filtering
+    return filter_search_results(results, minimal_output)
 
 
 def search_sync(

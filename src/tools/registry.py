@@ -95,6 +95,7 @@ def register_tools(mcp_app: FastMCP) -> None:
         context_chunks: int = 1,
         target_projects: list[str] = None,
         collection_types: list[str] = None,
+        minimal_output: bool = None,
     ):
         """Search indexed content using natural language queries.
 
@@ -114,6 +115,10 @@ def register_tools(mcp_app: FastMCP) -> None:
                             - ["config"] - Only search configuration files
                             - ["documentation"] - Only search documentation files
                             - None - Search all collection types (default)
+            minimal_output: Return simplified output for AI agents (default: env MCP_MINIMAL_OUTPUT=true)
+                          - True: Essential fields only (file_path, content, line numbers, breadcrumb)
+                          - False: Full results with all metadata and scores
+                          - None: Uses MCP_MINIMAL_OUTPUT env var
 
         Returns:
             Dictionary containing search results with metadata, scores, and context
@@ -127,6 +132,7 @@ def register_tools(mcp_app: FastMCP) -> None:
             context_chunks,
             target_projects,
             collection_types,
+            minimal_output,
         )
 
     @mcp_app.tool()

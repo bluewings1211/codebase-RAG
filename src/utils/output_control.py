@@ -1,7 +1,8 @@
 """Output control utilities for MCP tools.
 
 This module provides utilities to control the level of detail in MCP tool outputs
-based on environment variables and user preferences.
+based on environment variables and user preferences. Designed to reduce output
+verbosity for AI agents while preserving essential information.
 """
 
 import logging
@@ -14,160 +15,122 @@ logger = logging.getLogger(__name__)
 def get_output_config() -> dict[str, bool]:
     """Get output configuration based on environment variables.
 
-    This function reads MCP_ENV and MCP_DEBUG_LEVEL environment variables
-    to determine the appropriate level of detail for MCP tool outputs.
-
     Environment Variables:
-        MCP_ENV: 'production' or 'development' (default: 'development')
+        MCP_MINIMAL_OUTPUT: 'true' or 'false' (default: 'true' for agent-friendly output)
         MCP_DEBUG_LEVEL: 'DEBUG', 'INFO', 'WARNING', 'ERROR' (default: 'INFO')
-        CACHE_DEBUG_MODE: 'true' or 'false' (default: 'false')
 
     Returns:
         Dictionary with configuration flags:
-        - include_performance: Include performance metrics and timing data
-        - include_technical_details: Include technical implementation details
-        - include_internal_metadata: Include internal system metadata
+        - minimal_output: Return minimal output suitable for AI agents
+        - include_scores: Include relevance scores
+        - include_metadata: Include chunk metadata (name, signature, docstring)
+        - include_performance: Include performance metrics
         - include_debug_info: Include debug-level information
     """
-    # Get environment variables with defaults
-    mcp_env = os.getenv("MCP_ENV", "development").lower()
+    minimal_output = os.getenv("MCP_MINIMAL_OUTPUT", "true").lower() == "true"
     debug_level = os.getenv("MCP_DEBUG_LEVEL", "INFO").upper()
-    cache_debug = os.getenv("CACHE_DEBUG_MODE", "false").lower() == "true"
-
-    # Determine flags based on environment
-    is_production = mcp_env == "production"
     is_debug = debug_level == "DEBUG"
-    is_development = mcp_env == "development"
 
     config = {
-        # Performance metrics - show in debug mode or when cache debugging
-        "include_performance": is_debug or cache_debug,
-        # Technical details - show in development or debug mode
-        "include_technical_details": is_development or is_debug,
-        # Internal metadata - only in debug mode
-        "include_internal_metadata": is_debug,
-        # Debug info - only in debug mode
+        "minimal_output": minimal_output and not is_debug,
+        "include_scores": not minimal_output or is_debug,
+        "include_metadata": not minimal_output or is_debug,
+        "include_performance": is_debug,
         "include_debug_info": is_debug,
-        # Minimal output for production
-        "minimal_output": is_production and not is_debug,
     }
 
-    logger.debug(f"Output config: {config} (env={mcp_env}, debug={debug_level})")
+    logger.debug(f"Output config: {config} (minimal={minimal_output}, debug={debug_level})")
     return config
 
 
 def filter_search_results(
     results: dict[str, Any],
-    minimal_output: bool = False,
-    config: dict[str, bool] | None = None,
+    minimal_output: bool | None = None,
 ) -> dict[str, Any]:
     """Filter search results based on output configuration.
 
     Args:
         results: Raw search results dictionary
-        minimal_output: Force minimal output mode (overrides config)
-        config: Output configuration (uses get_output_config() if None)
+        minimal_output: Force minimal output mode (None = use env config)
 
     Returns:
         Filtered results dictionary with appropriate level of detail
     """
-    if config is None:
-        config = get_output_config()
+    config = get_output_config()
 
-    # Override config if minimal_output is explicitly requested
-    if minimal_output:
-        config = {
-            "include_performance": False,
-            "include_technical_details": False,
-            "include_internal_metadata": False,
-            "include_debug_info": False,
-            "minimal_output": True,
-        }
+    # Override config if minimal_output is explicitly specified
+    if minimal_output is not None:
+        config["minimal_output"] = minimal_output
+        config["include_scores"] = not minimal_output
+        config["include_metadata"] = not minimal_output
+        config["include_performance"] = False
 
-    # Always keep essential fields
+    # If not minimal, return original results
+    if not config["minimal_output"]:
+        return results
+
+    # Build minimal response
     filtered_results = {
         "query": results.get("query"),
-        "results": [],
         "total": results.get("total", 0),
+        "results": [],
     }
 
-    # Process individual results
+    # Process individual results - keep only essential fields
     for result in results.get("results", []):
         filtered_result = {
-            # Essential fields always included
+            # Essential fields for code navigation
             "file_path": result.get("file_path"),
-            "content": result.get("content"),
+            "line_start": result.get("line_start", 0),
+            "line_end": result.get("line_end", 0),
+            # Content - truncated for minimal output
+            "content": _truncate_for_minimal(result.get("content", ""), max_length=800),
+            # Context for understanding
             "breadcrumb": result.get("breadcrumb"),
             "chunk_type": result.get("chunk_type"),
             "language": result.get("language"),
-            "line_start": result.get("line_start", 0),
-            "line_end": result.get("line_end", 0),
         }
 
-        # Add optional fields based on configuration
-        if not config.get("minimal_output", False):
-            # Add basic metadata
-            if "name" in result:
+        # Include score only if configured
+        if config["include_scores"]:
+            filtered_result["score"] = result.get("score")
+
+        # Include metadata only if configured
+        if config["include_metadata"]:
+            if result.get("name"):
                 filtered_result["name"] = result["name"]
-            if "signature" in result:
+            if result.get("signature"):
                 filtered_result["signature"] = result["signature"]
-            if "docstring" in result:
-                filtered_result["docstring"] = result["docstring"]
-
-        if config.get("include_technical_details", True):
-            # Add technical scoring details
-            filtered_result.update(
-                {
-                    "local_score": result.get("local_score"),
-                    "global_score": result.get("global_score"),
-                    "combined_score": result.get("combined_score"),
-                    "confidence_level": result.get("confidence_level"),
-                    "retrieval_mode": result.get("retrieval_mode"),
-                    "retrieval_source": result.get("retrieval_source"),
-                }
-            )
-
-        if config.get("include_internal_metadata", False):
-            # Add internal system metadata
-            filtered_result.update(
-                {
-                    "local_context": result.get("local_context", []),
-                    "global_context": result.get("global_context", []),
-                    "relationship_paths": result.get("relationship_paths", []),
-                    "rank": result.get("rank"),
-                    "project": result.get("project"),
-                }
-            )
 
         filtered_results["results"].append(filtered_result)
 
-    # Add optional top-level metadata
-    if config.get("include_technical_details", True):
-        filtered_results.update(
-            {
-                "mode_used": results.get("mode_used"),
-                "projects_searched": results.get("projects_searched"),
-                "search_method": results.get("search_method"),
-            }
-        )
+    # Add minimal top-level info
+    if results.get("search_scope"):
+        filtered_results["search_scope"] = results["search_scope"]
 
-    if config.get("include_performance", False):
-        # Add performance data
-        if "performance" in results:
-            filtered_results["performance"] = results["performance"]
-        if "performance_context" in results:
-            filtered_results["performance_context"] = results["performance_context"]
-        if "_performance" in results:
-            filtered_results["_performance"] = results["_performance"]
+    # Add error info if present
+    if results.get("error"):
+        filtered_results["error"] = results["error"]
 
-    if config.get("include_internal_metadata", False):
-        # Add internal metadata
-        if "multi_modal_metadata" in results:
-            filtered_results["multi_modal_metadata"] = results["multi_modal_metadata"]
-        if "query_analysis" in results:
-            filtered_results["query_analysis"] = results["query_analysis"]
+    if results.get("suggestions"):
+        filtered_results["suggestions"] = results["suggestions"]
 
     return filtered_results
+
+
+def _truncate_for_minimal(content: str, max_length: int = 800) -> str:
+    """Truncate content for minimal output mode.
+
+    Args:
+        content: Text content to truncate
+        max_length: Maximum length before truncation
+
+    Returns:
+        Truncated content with indicator if needed
+    """
+    if not content or len(content) <= max_length:
+        return content
+    return content[:max_length] + "\n... (truncated)"
 
 
 def get_environment_info() -> dict[str, str]:
@@ -177,8 +140,6 @@ def get_environment_info() -> dict[str, str]:
         Dictionary with current environment variable values
     """
     return {
-        "MCP_ENV": os.getenv("MCP_ENV", "development"),
+        "MCP_MINIMAL_OUTPUT": os.getenv("MCP_MINIMAL_OUTPUT", "true"),
         "MCP_DEBUG_LEVEL": os.getenv("MCP_DEBUG_LEVEL", "INFO"),
-        "CACHE_DEBUG_MODE": os.getenv("CACHE_DEBUG_MODE", "false"),
-        "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO"),
     }
