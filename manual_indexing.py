@@ -225,17 +225,21 @@ class ManualIndexingTool:
             # Finalize reporting
             duration = time.time() - start_time
 
+            # Update file counts for reporting - use actual counts based on embedding success
+            self.reporter.update_file_counts(
+                processed=result.total_files_processed,
+                successful=result.total_files_processed,  # Files are processed, chunks may fail
+            )
+
+            # Finalize report with embedding failure information
             self.reporter.finalize_report(
                 total_chunks=result.total_chunks_generated,
                 total_points=result.total_points_stored,
                 collections_used=result.collections_used,
                 performance_metrics=result.performance_metrics,
-            )
-
-            # Update file counts for reporting
-            self.reporter.update_file_counts(
-                processed=result.total_files_processed,
-                successful=result.total_files_processed if result.success else 0,
+                embedding_failures=result.embedding_failures,
+                embedding_success_rate=result.embedding_success_rate,
+                failed_chunks=result.failed_chunks,
             )
 
             # Extract any syntax errors from the indexing service
@@ -245,7 +249,10 @@ class ManualIndexingTool:
             self.reporter.print_summary()
 
             # Save error report if there were issues or verbose mode
-            if self.reporter.current_report and (self.reporter.current_report.get_error_summary() or self.verbose):
+            has_issues = self.reporter.current_report and (
+                self.reporter.current_report.get_error_summary() or self.reporter.current_report.embedding_failures > 0 or self.verbose
+            )
+            if has_issues:
                 try:
                     report_path = self.reporter.save_report(self.error_report_dir)
                     print(f"\n📋 Report saved to: {report_path}")
@@ -254,7 +261,11 @@ class ManualIndexingTool:
 
             # Print final status
             if result.success:
-                print("\n✅ Indexing completed successfully!")
+                if result.embedding_failures > 0:
+                    print(f"\n⚠️  Indexing completed with {result.embedding_failures} embedding failures")
+                    print(f"   Embedding success rate: {result.embedding_success_rate:.1f}%")
+                else:
+                    print("\n✅ Indexing completed successfully!")
                 print(f"⏱️  Total time: {format_duration(duration)}")
                 if result.performance_metrics:
                     memory_mb = result.performance_metrics.get("memory_usage_mb", 0)

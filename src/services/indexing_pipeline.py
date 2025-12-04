@@ -39,6 +39,10 @@ class PipelineResult:
     warning_count: int
     change_summary: dict[str, Any] | None = None
     performance_metrics: dict[str, Any] | None = None
+    # Embedding failure tracking
+    embedding_failures: int = 0
+    embedding_success_rate: float = 100.0
+    failed_chunks: list[dict[str, Any]] | None = None
 
 
 class IndexingPipeline:
@@ -119,9 +123,13 @@ class IndexingPipeline:
 
             # Generate embeddings and store
             self._report_progress("Generating embeddings and storing to vector database")
-            points_stored, collections_used = self._process_chunks_to_storage(
-                chunks, {"project_name": project_name, "source_path": directory}
-            )
+            (
+                points_stored,
+                collections_used,
+                embedding_failures,
+                embedding_success_rate,
+                failed_chunks,
+            ) = self._process_chunks_to_storage(chunks, {"project_name": project_name, "source_path": directory})
 
             # Store file metadata
             self._report_progress("Storing file metadata for change detection")
@@ -137,9 +145,12 @@ class IndexingPipeline:
                 total_points_stored=points_stored,
                 collections_used=collections_used,
                 processing_time_seconds=processing_time,
-                error_count=0,
+                error_count=embedding_failures,
                 warning_count=0,
                 performance_metrics=self._get_performance_metrics(),
+                embedding_failures=embedding_failures,
+                embedding_success_rate=embedding_success_rate,
+                failed_chunks=failed_chunks,
             )
 
         except Exception as e:
@@ -250,14 +261,23 @@ class IndexingPipeline:
                 )
 
             # Process changed files
+            embedding_failures = 0
+            embedding_success_rate = 100.0
+            failed_chunks: list[dict[str, Any]] = []
+            chunks = None
+
             if files_to_reindex:
                 self._report_progress(f"Processing {len(files_to_reindex)} changed files")
                 chunks = self.indexing_service.process_specific_files(files_to_reindex, project_name, directory)
 
                 if chunks:
-                    points_stored, collections = self._process_chunks_to_storage(
-                        chunks, {"project_name": project_name, "source_path": directory}
-                    )
+                    (
+                        points_stored,
+                        collections,
+                        embedding_failures,
+                        embedding_success_rate,
+                        failed_chunks,
+                    ) = self._process_chunks_to_storage(chunks, {"project_name": project_name, "source_path": directory})
                     total_points_stored = points_stored
                     collections_used = collections
 
@@ -293,10 +313,13 @@ class IndexingPipeline:
                 total_points_stored=total_points_stored,
                 collections_used=collections_used,
                 processing_time_seconds=processing_time,
-                error_count=0,
+                error_count=embedding_failures,
                 warning_count=0,
                 change_summary=changes.get_summary(),
                 performance_metrics=self._get_performance_metrics(),
+                embedding_failures=embedding_failures,
+                embedding_success_rate=embedding_success_rate,
+                failed_chunks=failed_chunks,
             )
 
         except Exception as e:
@@ -319,7 +342,9 @@ class IndexingPipeline:
             except Exception:
                 pass
 
-    def _process_chunks_to_storage(self, chunks: list, project_context: dict[str, Any]) -> tuple[int, list[str]]:
+    def _process_chunks_to_storage(
+        self, chunks: list, project_context: dict[str, Any]
+    ) -> tuple[int, list[str], int, float, list[dict[str, Any]]]:
         """
         Process chunks into embeddings and store them.
 
@@ -328,7 +353,8 @@ class IndexingPipeline:
             project_context: Project context information
 
         Returns:
-            Tuple of (total_points_stored, collections_used)
+            Tuple of (total_points_stored, collections_used, embedding_failures,
+                     embedding_success_rate, failed_chunks)
         """
         import os
 
@@ -355,22 +381,30 @@ class IndexingPipeline:
             collection_chunks[collection_name].append(chunk)
 
         total_points = 0
+        total_embedding_failures = 0
+        total_chunks_attempted = 0
+        all_failed_chunks: list[dict[str, Any]] = []
         collections_used = list(collection_chunks.keys())
 
         # Process each collection
         for collection_name, collection_chunk_list in collection_chunks.items():
             try:
-                # Generate embeddings
+                # Generate embeddings with metadata for error tracking
                 texts = [chunk.content for chunk in collection_chunk_list]
-                embeddings = self.embedding_service.generate_embeddings(model_name, texts)
+                chunk_metadata = [chunk.metadata for chunk in collection_chunk_list]
+
+                embeddings = self.embedding_service.generate_embeddings(model_name, texts, chunk_metadata=chunk_metadata)
+
+                total_chunks_attempted += len(collection_chunk_list)
 
                 if embeddings is None:
                     self._report_error("embedding", collection_name, "Failed to generate embeddings", "Check Ollama service availability")
+                    total_embedding_failures += len(collection_chunk_list)
                     continue
 
-                # Create points
+                # Create points and track failures
                 points = []
-                for chunk, embedding in zip(collection_chunk_list, embeddings, strict=False):
+                for idx, (chunk, embedding) in enumerate(zip(collection_chunk_list, embeddings, strict=False)):
                     if embedding is not None:
                         point_id = str(uuid4())
                         metadata = chunk.metadata.copy()
@@ -380,6 +414,19 @@ class IndexingPipeline:
 
                         point = PointStruct(id=point_id, vector=embedding.tolist(), payload=metadata)
                         points.append(point)
+                    else:
+                        # Track failed chunk
+                        total_embedding_failures += 1
+                        all_failed_chunks.append(
+                            {
+                                "file_path": chunk.metadata.get("file_path", ""),
+                                "name": chunk.metadata.get("name", ""),
+                                "chunk_type": chunk.metadata.get("chunk_type", ""),
+                                "start_line": chunk.metadata.get("start_line", 0),
+                                "end_line": chunk.metadata.get("end_line", 0),
+                                "collection": collection_name,
+                            }
+                        )
 
                 if points:
                     # Ensure collection exists
@@ -400,7 +447,12 @@ class IndexingPipeline:
             except Exception as e:
                 self._report_error("processing", collection_name, f"Collection processing failed: {str(e)}")
 
-        return total_points, collections_used
+        # Calculate success rate
+        embedding_success_rate = (
+            ((total_chunks_attempted - total_embedding_failures) / total_chunks_attempted * 100) if total_chunks_attempted > 0 else 100.0
+        )
+
+        return total_points, collections_used, total_embedding_failures, embedding_success_rate, all_failed_chunks
 
     def _store_file_metadata(self, directory: str, project_name: str, specific_files: list[str] | None = None):
         """

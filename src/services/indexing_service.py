@@ -157,7 +157,9 @@ class IndexingService:
                 batch_files = files_to_process[batch_start:batch_end]
                 batch_num = batch_start // batch_size + 1
 
-                self.file_reading_logger.info(f"Processing batch {batch_num}: files {batch_start + 1}-{batch_end}")
+                # Only log batch start at intervals to reduce noise
+                if batch_num % 50 == 1 or batch_num == 1:
+                    self.file_reading_logger.info(f"Processing batch {batch_num}: files {batch_start + 1}-{batch_end}")
                 batch_start_time = time.time()
 
                 # Use ThreadPoolExecutor with proper resource management
@@ -216,7 +218,7 @@ class IndexingService:
                         # Ensure ThreadPoolExecutor cleanup
                         executor.shutdown(wait=True)
 
-                # Log batch completion
+                # Log batch completion (only logs if there are failures or at intervals)
                 batch_duration = time.time() - batch_start_time
                 log_batch_summary(
                     self.file_reading_logger,
@@ -225,14 +227,19 @@ class IndexingService:
                     batch_processed,
                     batch_failed,
                     batch_duration,
+                    log_interval=50,  # Log every 50 batches
                 )
 
                 # Memory cleanup between batches
                 self._cleanup_memory()
 
-                # Monitor memory usage with automatic warnings
+                # Monitor memory usage with automatic warnings (only log at intervals or if high)
                 memory_stats = self.memory_monitor.check_memory_usage(self.logger)
-                self.logger.info(f"Batch completed. Memory usage: {memory_stats['memory_mb']} MB ({memory_stats['memory_percent']}%)")
+                # Only log memory if it's high (>80%) or at batch intervals
+                if memory_stats["memory_percent"] > 80 or batch_num % 50 == 0:
+                    self.logger.info(
+                        f"[PID:{os.getpid()}] - Batch completed. Memory usage: {memory_stats['memory_mb']} MB ({memory_stats['memory_percent']}%)"
+                    )
 
         # Report any errors
         if self._error_files:
@@ -612,7 +619,9 @@ class IndexingService:
                 batch_files = file_paths[i : i + batch_size]
                 batch_num = (i // batch_size) + 1
 
-                self.logger.info(f"Processing batch {batch_num}: {len(batch_files)} files")
+                # Only log batch start at intervals to reduce noise
+                if batch_num % 50 == 1 or batch_num == 1:
+                    self.logger.info(f"Processing batch {batch_num}: {len(batch_files)} files")
                 batch_start_time = time.time()
                 batch_processed = 0
                 batch_failed = 0
@@ -653,7 +662,7 @@ class IndexingService:
                 # Update stage progress
                 stage.processed_count = self._processed_count
 
-                # Log batch completion
+                # Log batch completion (only logs if there are failures or at intervals)
                 batch_duration = time.time() - batch_start_time
                 log_batch_summary(
                     self.file_reading_logger,
@@ -662,14 +671,16 @@ class IndexingService:
                     batch_processed,
                     batch_failed,
                     batch_duration,
+                    log_interval=50,  # Log every 50 batches
                 )
 
                 # Memory cleanup between batches
                 self._cleanup_memory()
 
-                # Monitor memory usage
+                # Monitor memory usage (only log at intervals or if high)
                 memory_stats = self.memory_monitor.check_memory_usage(self.logger)
-                self.logger.info(f"Batch completed. Memory usage: {memory_stats['memory_mb']} MB ({memory_stats['memory_percent']}%)")
+                if memory_stats["memory_percent"] > 80 or batch_num % 50 == 0:
+                    self.logger.info(f"Batch completed. Memory usage: {memory_stats['memory_mb']} MB ({memory_stats['memory_percent']}%)")
 
         # Report any errors
         if self._error_files:

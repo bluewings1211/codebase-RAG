@@ -252,11 +252,35 @@ def log_batch_summary(
     processed: int,
     failed: int,
     duration: float,
+    log_interval: int = 50,
+    force: bool = False,
 ) -> None:
-    """Log summary for a batch operation."""
+    """Log summary for a batch operation.
+
+    Only logs in the following cases to reduce noise:
+    - There are failures (always log)
+    - It's a log interval batch (every N batches)
+    - force=True is passed
+
+    Args:
+        logger: The stage logger to use
+        batch_num: Current batch number
+        batch_size: Size of the batch
+        processed: Number of items processed
+        failed: Number of items that failed
+        duration: Duration of the batch in seconds
+        log_interval: Log every N batches (default: 50)
+        force: Force logging regardless of interval
+    """
     rate = processed / duration if duration > 0 else 0
-    logger.info(
-        f"BATCH: {batch_num} - Size: {batch_size} - "
-        f"Processed: {processed} - Failed: {failed} - "
-        f"Duration: {duration:.2f}s - Rate: {rate:.2f}/s"
-    )
+
+    # Always log if there are failures
+    if failed > 0:
+        logger.warning(
+            f"⚠️  BATCH: {batch_num} - Size: {batch_size} - "
+            f"Processed: {processed} - Failed: {failed} - "
+            f"Duration: {duration:.2f}s - Rate: {rate:.2f}/s"
+        )
+    # Log at intervals or when forced
+    elif force or batch_num % log_interval == 0:
+        logger.info(f"📊 Progress: batch {batch_num} - " f"Processed: {processed}/{batch_size} - " f"Rate: {rate:.2f}/s")

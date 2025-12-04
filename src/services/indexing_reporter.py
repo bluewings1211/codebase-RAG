@@ -55,6 +55,10 @@ class IndexingReport:
     syntax_errors: list[IndexingError] = field(default_factory=list)  # Syntax-specific errors
     performance_metrics: dict[str, Any] = field(default_factory=dict)  # Performance data
     recommendations: list[str] = field(default_factory=list)  # Actionable recommendations
+    # Embedding failure tracking
+    embedding_failures: int = 0  # Number of chunks that failed embedding
+    embedding_success_rate: float = 100.0  # Embedding success rate percentage
+    failed_chunks: list[dict[str, Any]] = field(default_factory=list)  # List of failed chunk details
 
     def add_error(self, error: IndexingError):
         """Add an error to the appropriate category."""
@@ -105,6 +109,10 @@ class IndexingReport:
             "syntax_errors": [asdict(error) for error in self.syntax_errors],
             "performance_metrics": self.performance_metrics,
             "recommendations": self.recommendations,
+            # Embedding failure details
+            "embedding_failures": self.embedding_failures,
+            "embedding_success_rate": self.embedding_success_rate,
+            "failed_chunks": self.failed_chunks,
         }
 
 
@@ -194,6 +202,9 @@ class IndexingReporter:
         total_points: int = 0,
         collections_used: list[str] | None = None,
         performance_metrics: dict[str, Any] | None = None,
+        embedding_failures: int = 0,
+        embedding_success_rate: float = 100.0,
+        failed_chunks: list[dict[str, Any]] | None = None,
     ) -> IndexingReport:
         """
         Finalize the current report with final statistics.
@@ -203,6 +214,9 @@ class IndexingReporter:
             total_points: Total points stored in vector database
             collections_used: List of collections used
             performance_metrics: Performance metrics dictionary
+            embedding_failures: Number of chunks that failed embedding
+            embedding_success_rate: Embedding success rate percentage
+            failed_chunks: List of failed chunk details
 
         Returns:
             Finalized IndexingReport
@@ -219,6 +233,11 @@ class IndexingReporter:
         self.current_report.total_points = total_points
         self.current_report.collections_used = collections_used or []
         self.current_report.performance_metrics = performance_metrics or {}
+
+        # Update embedding failure statistics
+        self.current_report.embedding_failures = embedding_failures
+        self.current_report.embedding_success_rate = embedding_success_rate
+        self.current_report.failed_chunks = failed_chunks or []
 
         # Generate recommendations
         self._generate_recommendations()
@@ -277,9 +296,29 @@ class IndexingReporter:
         print(f"Points stored: {self.current_report.total_points:,}")
         print(f"Collections used: {len(self.current_report.collections_used)}")
 
-        if total_errors == 0:
+        # Show embedding statistics
+        if self.current_report.embedding_failures > 0:
+            print(f"\n⚠️  EMBEDDING FAILURES: {self.current_report.embedding_failures} chunks")
+            print(f"   Embedding success rate: {self.current_report.embedding_success_rate:.1f}%")
+
+            # Group failed chunks by file for summary
+            if self.current_report.failed_chunks:
+                failures_by_file: dict[str, list[dict]] = {}
+                for chunk in self.current_report.failed_chunks:
+                    file_path = chunk.get("file_path", "unknown")
+                    if file_path not in failures_by_file:
+                        failures_by_file[file_path] = []
+                    failures_by_file[file_path].append(chunk)
+
+                print(f"   Failed chunks by file ({len(failures_by_file)} files affected):")
+                for file_path, chunks in list(failures_by_file.items())[:5]:  # Show first 5 files
+                    print(f"      📁 {file_path}: {len(chunks)} chunks")
+                if len(failures_by_file) > 5:
+                    print(f"      ... and {len(failures_by_file) - 5} more files")
+
+        if total_errors == 0 and self.current_report.embedding_failures == 0:
             print("✅ No errors or warnings encountered!")
-        else:
+        elif total_errors > 0:
             print(f"\n📋 ISSUES SUMMARY ({total_errors} total)")
             print("-" * 30)
 

@@ -13,6 +13,20 @@ import torch
 
 
 @dataclass
+class FailedEmbeddingInfo:
+    """Information about a failed embedding for debugging."""
+
+    index: int
+    error_message: str
+    file_path: str = ""
+    chunk_name: str = ""
+    chunk_type: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    text_preview: str = ""
+
+
+@dataclass
 class BatchMetrics:
     """Metrics for tracking batch processing performance."""
 
@@ -26,6 +40,7 @@ class BatchMetrics:
     failed_embeddings: int = 0
     retry_attempts: int = 0
     subdivisions: int = 0
+    failed_items: list[FailedEmbeddingInfo] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -72,6 +87,7 @@ class CumulativeMetrics:
     total_subdivisions: int = 0
     start_time: float = field(default_factory=time.time)
     end_time: float | None = None
+    all_failed_items: list[FailedEmbeddingInfo] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -118,6 +134,13 @@ class EmbeddingService:
         self.cumulative_metrics = CumulativeMetrics()
         self.current_batch_metrics: BatchMetrics | None = None
         self._metrics_enabled = os.getenv("EMBEDDING_METRICS_ENABLED", "true").lower() == "true"
+
+        # Log verbosity control
+        self._log_successful_batches = os.getenv("LOG_SUCCESSFUL_BATCHES", "false").lower() == "true"
+        self._log_batch_interval = int(os.getenv("LOG_BATCH_INTERVAL", "100"))  # Log progress every N batches
+
+        # Current batch metadata for error tracking
+        self._current_batch_metadata: list[dict] | None = None
 
     def _get_device(self):
         if platform.system() == "Darwin":
@@ -195,12 +218,19 @@ class EmbeddingService:
 
         return [left_batch, right_batch]
 
-    def generate_embeddings(self, model: str, text: str | list[str]) -> torch.Tensor | list[torch.Tensor] | None:
+    def generate_embeddings(
+        self,
+        model: str,
+        text: str | list[str],
+        chunk_metadata: list[dict] | None = None,
+    ) -> torch.Tensor | list[torch.Tensor] | None:
         """Generate embeddings for single text or batch of texts.
 
         Args:
             model: The embedding model to use
             text: Single text string or list of text strings
+            chunk_metadata: Optional list of metadata dicts for each text (for error tracking).
+                           Each dict should contain: file_path, name, chunk_type, start_line, end_line
 
         Returns:
             Single tensor for single text, list of tensors for batch, or None on error
@@ -209,7 +239,7 @@ class EmbeddingService:
         if isinstance(text, str):
             return self._generate_single_embedding(model, text)
         elif isinstance(text, list):
-            return self._generate_batch_embeddings(model, text)
+            return self._generate_batch_embeddings(model, text, chunk_metadata)
         else:
             self.logger.error(f"Invalid input type for text: {type(text)}")
             return None
@@ -245,11 +275,19 @@ class EmbeddingService:
             self.logger.error(f"An error occurred while generating single embedding: {e}")
             return None
 
-    def _generate_batch_embeddings(self, model: str, texts: list[str]) -> list[torch.Tensor] | None:
+    def _generate_batch_embeddings(
+        self,
+        model: str,
+        texts: list[str],
+        chunk_metadata: list[dict] | None = None,
+    ) -> list[torch.Tensor] | None:
         """Generate embeddings for multiple texts using intelligent batching with metrics tracking."""
         if not texts:
             self.logger.warning("Empty text list provided for batch embedding")
             return []
+
+        # Store metadata for error tracking
+        self._current_batch_metadata = chunk_metadata
 
         # Initialize cumulative metrics if this is the first call
         if self.cumulative_metrics.start_time == 0:
@@ -258,13 +296,13 @@ class EmbeddingService:
         self.logger.info(f"Generating embeddings for batch of {len(texts)} texts using intelligent batching")
 
         try:
-            # Split texts into optimal batches
+            # Split texts into optimal batches (each batch includes start_index)
             batches = self._create_intelligent_batches(texts)
             self.logger.info(f"Created {len(batches)} intelligent batches for processing")
 
             all_embeddings = []
 
-            for batch_idx, batch_texts in enumerate(batches):
+            for batch_idx, (batch_texts, batch_start_index) in enumerate(batches):
                 batch_start_time = time.time()
 
                 # Create batch metrics
@@ -279,9 +317,11 @@ class EmbeddingService:
                         start_time=batch_start_time,
                     )
 
-                self.logger.info(f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch_texts)} texts ({batch_chars} chars)")
+                # Only log batch start info in verbose mode or at intervals
+                if self._log_successful_batches or batch_idx % self._log_batch_interval == 0:
+                    self.logger.info(f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch_texts)} texts ({batch_chars} chars)")
 
-                batch_embeddings = self._process_single_batch(model, batch_texts)
+                batch_embeddings = self._process_single_batch(model, batch_texts, batch_start_index)
 
                 # Update metrics
                 if self._metrics_enabled and self.current_batch_metrics:
@@ -318,16 +358,22 @@ class EmbeddingService:
             self.logger.error(f"An error occurred while generating batch embeddings: {e}")
             return None
 
-    def _create_intelligent_batches(self, texts: list[str]) -> list[list[str]]:
-        """Create intelligent batches based on content size and batch limits."""
+    def _create_intelligent_batches(self, texts: list[str]) -> list[tuple[list[str], int]]:
+        """Create intelligent batches based on content size and batch limits.
+
+        Returns:
+            List of tuples: (batch_texts, start_index) where start_index is the
+            index of the first text in the original texts list.
+        """
         if not texts:
             return []
 
         batches = []
         current_batch = []
+        current_batch_start_idx = 0
         current_batch_chars = 0
 
-        for text in texts:
+        for idx, text in enumerate(texts):
             text_length = len(text) if text else 0
 
             # Check if adding this text would exceed limits
@@ -336,8 +382,9 @@ class EmbeddingService:
 
             # If current batch would be exceeded, start a new batch
             if current_batch and (would_exceed_chars or would_exceed_count):
-                batches.append(current_batch)
+                batches.append((current_batch, current_batch_start_idx))
                 current_batch = []
+                current_batch_start_idx = idx
                 current_batch_chars = 0
 
             # Add text to current batch
@@ -353,26 +400,33 @@ class EmbeddingService:
                     current_batch_chars -= text_length
 
                     # Save current batch and create new batch for oversized text
-                    batches.append(current_batch)
-                    batches.append([oversized_text])
+                    batches.append((current_batch, current_batch_start_idx))
+                    batches.append(([oversized_text], idx))
                     current_batch = []
+                    current_batch_start_idx = idx + 1
                     current_batch_chars = 0
 
         # Add remaining texts
         if current_batch:
-            batches.append(current_batch)
+            batches.append((current_batch, current_batch_start_idx))
 
         return batches
 
-    def _process_single_batch(self, model: str, texts: list[str]) -> list[torch.Tensor] | None:
+    def _process_single_batch(self, model: str, texts: list[str], batch_start_index: int = 0) -> list[torch.Tensor] | None:
         """Process a single batch of texts with retry logic and subdivision on failure."""
-        return self._process_batch_with_retry(model, texts)
+        return self._process_batch_with_retry(model, texts, batch_start_index=batch_start_index)
 
-    def _process_batch_with_retry(self, model: str, texts: list[str], attempt_subdivision: bool = True) -> list[torch.Tensor] | None:
+    def _process_batch_with_retry(
+        self,
+        model: str,
+        texts: list[str],
+        attempt_subdivision: bool = True,
+        batch_start_index: int = 0,
+    ) -> list[torch.Tensor] | None:
         """Process batch with retry logic and optional subdivision on failure."""
         try:
             # Try processing the batch normally first
-            return self._process_batch_core(model, texts)
+            return self._process_batch_core(model, texts, batch_start_index)
 
         except Exception as e:
             # Check if we should retry this exception
@@ -393,15 +447,21 @@ class EmbeddingService:
                     sub_batches = self._split_oversized_batch(texts)
                     all_embeddings = []
 
+                    current_offset = 0
                     for sub_batch in sub_batches:
                         # Process each sub-batch without further subdivision to avoid infinite recursion
-                        sub_embeddings = self._process_batch_with_retry(model, sub_batch, attempt_subdivision=False)
+                        sub_start_index = batch_start_index + current_offset
+                        sub_embeddings = self._process_batch_with_retry(
+                            model, sub_batch, attempt_subdivision=False, batch_start_index=sub_start_index
+                        )
 
                         if sub_embeddings is None:
                             # If sub-batch fails, add None placeholders
                             all_embeddings.extend([None] * len(sub_batch))
                         else:
                             all_embeddings.extend(sub_embeddings)
+
+                        current_offset += len(sub_batch)
 
                     return all_embeddings
 
@@ -413,7 +473,7 @@ class EmbeddingService:
                 self.logger.error(f"Batch processing failed and cannot subdivide further: {e}")
                 return None
 
-    def _process_batch_core(self, model: str, texts: list[str]) -> list[torch.Tensor] | None:
+    def _process_batch_core(self, model: str, texts: list[str], batch_start_index: int = 0) -> list[torch.Tensor] | None:
         """Core batch processing logic with retry decorator applied."""
 
         # Apply retry decorator to the core processing logic
@@ -424,8 +484,12 @@ class EmbeddingService:
             api_call_start = time.time()
 
             for i, text in enumerate(texts):
+                # Calculate the original index in the full texts list
+                original_index = batch_start_index + i
+
                 if not text or not text.strip():
-                    self.logger.warning(f"Skipping empty text at index {i}")
+                    self.logger.warning(f"Skipping empty text at index {original_index}")
+                    self._record_failed_embedding(original_index, "Empty or whitespace-only text", text)
                     embeddings.append(None)
                     continue
 
@@ -441,10 +505,11 @@ class EmbeddingService:
 
                     # Log individual API response time for debugging
                     if individual_duration > 5.0:  # Log slow API calls
-                        self.logger.warning(f"Slow API response for text {i}: {individual_duration:.2f}s")
+                        self.logger.warning(f"Slow API response for index {original_index}: {individual_duration:.2f}s")
 
                     if not response.get("embedding") or len(response["embedding"]) == 0:
-                        self.logger.warning(f"Received empty embedding for text at index {i}: {text[:50]}...")
+                        self._log_embedding_error(original_index, "Received empty embedding", text)
+                        self._record_failed_embedding(original_index, "Empty embedding returned", text)
                         embeddings.append(None)
                         continue
 
@@ -460,8 +525,9 @@ class EmbeddingService:
                     if self._metrics_enabled and self.current_batch_metrics:
                         self.current_batch_metrics.api_calls += 1
 
-                    # For individual text errors, don't retry the whole batch
-                    self.logger.error(f"Error generating embedding for text at index {i}: {text_error}")
+                    # Log detailed error with chunk info
+                    self._log_embedding_error(original_index, str(text_error), text)
+                    self._record_failed_embedding(original_index, str(text_error), text)
                     embeddings.append(None)
 
             total_api_duration = time.time() - api_call_start
@@ -519,26 +585,104 @@ class EmbeddingService:
             self.logger.error(f"Core batch processing failed after all retries: {e}")
             return None
 
-    def _log_batch_metrics(self, metrics: BatchMetrics) -> None:
-        """Log detailed metrics for a single batch."""
+    def _log_embedding_error(self, original_index: int, error_message: str, text: str) -> None:
+        """Log detailed embedding error with chunk metadata if available."""
+        # Try to get metadata for this index
+        chunk_info = ""
+        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
+            meta = self._current_batch_metadata[original_index]
+            file_path = meta.get("file_path", "unknown")
+            chunk_name = meta.get("name", "unknown")
+            chunk_type = meta.get("chunk_type", "unknown")
+            # Support both naming conventions: line_start/line_end and start_line/end_line
+            start_line = meta.get("line_start") or meta.get("start_line", "?")
+            end_line = meta.get("line_end") or meta.get("end_line", "?")
+
+            chunk_info = (
+                f"\n    📁 File: {file_path}" f"\n    🔖 Chunk: {chunk_type}:{chunk_name}" f"\n    📍 Lines: {start_line}-{end_line}"
+            )
+
+        text_preview = text[:150].replace("\n", " ") if text else "(empty)"
+        if len(text) > 150:
+            text_preview += "..."
+
+        self.logger.error(
+            f"Embedding failed at index {original_index}: {error_message}" f"{chunk_info}" f"\n    📝 Preview: {text_preview}"
+        )
+
+    def _record_failed_embedding(self, original_index: int, error_message: str, text: str) -> None:
+        """Record a failed embedding for later reporting."""
         if not self._metrics_enabled:
             return
 
-        self.logger.info(
-            f"Batch {metrics.batch_id} completed - "
-            f"Duration: {metrics.duration_seconds:.2f}s, "
-            f"Success: {metrics.successful_embeddings}/{metrics.batch_size}, "
-            f"Rate: {metrics.embeddings_per_second:.2f} emb/s, "
-            f"Chars/s: {metrics.chars_per_second:.0f}, "
-            f"API calls: {metrics.api_calls}, "
-            f"Efficiency: {metrics.api_efficiency:.2f} emb/call"
+        # Get metadata if available
+        file_path = ""
+        chunk_name = ""
+        chunk_type = ""
+        start_line = 0
+        end_line = 0
+
+        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
+            meta = self._current_batch_metadata[original_index]
+            file_path = meta.get("file_path", "")
+            chunk_name = meta.get("name", "")
+            chunk_type = meta.get("chunk_type", "")
+            # Support both naming conventions: line_start/line_end and start_line/end_line
+            start_line = meta.get("line_start") or meta.get("start_line", 0)
+            end_line = meta.get("line_end") or meta.get("end_line", 0)
+
+        failed_info = FailedEmbeddingInfo(
+            index=original_index,
+            error_message=error_message,
+            file_path=file_path,
+            chunk_name=chunk_name,
+            chunk_type=chunk_type,
+            start_line=start_line,
+            end_line=end_line,
+            text_preview=text[:100] if text else "",
         )
 
-        if metrics.retry_attempts > 0:
-            self.logger.info(f"  Retries: {metrics.retry_attempts}")
+        # Add to current batch metrics
+        if self.current_batch_metrics:
+            self.current_batch_metrics.failed_items.append(failed_info)
 
-        if metrics.subdivisions > 0:
-            self.logger.info(f"  Subdivisions: {metrics.subdivisions}")
+        # Also add to cumulative metrics
+        self.cumulative_metrics.all_failed_items.append(failed_info)
+
+    def _log_batch_metrics(self, metrics: BatchMetrics) -> None:
+        """Log metrics for a single batch - only log if there are issues or at intervals."""
+        if not self._metrics_enabled:
+            return
+
+        has_failures = metrics.failed_embeddings > 0
+        has_retries = metrics.retry_attempts > 0
+        has_subdivisions = metrics.subdivisions > 0
+        is_interval = self.cumulative_metrics.total_batches % self._log_batch_interval == 0
+
+        # Always log batches with issues
+        if has_failures or has_retries or has_subdivisions:
+            self.logger.warning(
+                f"⚠️  Batch {metrics.batch_id} - "
+                f"Success: {metrics.successful_embeddings}/{metrics.batch_size}, "
+                f"Failed: {metrics.failed_embeddings}, "
+                f"Retries: {metrics.retry_attempts}, "
+                f"Subdivisions: {metrics.subdivisions}"
+            )
+        # Log progress at intervals or if verbose mode enabled
+        elif self._log_successful_batches:
+            self.logger.info(
+                f"Batch {metrics.batch_id} completed - "
+                f"Duration: {metrics.duration_seconds:.2f}s, "
+                f"Success: {metrics.successful_embeddings}/{metrics.batch_size}, "
+                f"Rate: {metrics.embeddings_per_second:.2f} emb/s"
+            )
+        elif is_interval:
+            # Compact progress log at intervals
+            self.logger.info(
+                f"📊 Progress: {self.cumulative_metrics.total_batches} batches, "
+                f"{self.cumulative_metrics.total_successful}/{self.cumulative_metrics.total_embeddings} embeddings "
+                f"({self.cumulative_metrics.overall_success_rate:.1%} success)"
+            )
 
     def _update_cumulative_metrics(self, batch_metrics: BatchMetrics) -> None:
         """Update cumulative metrics with batch results."""
@@ -565,6 +709,8 @@ class EmbeddingService:
         self.logger.info(f"Total duration: {self.cumulative_metrics.duration_seconds:.2f}s")
         self.logger.info(f"Total batches processed: {self.cumulative_metrics.total_batches}")
         self.logger.info(f"Total embeddings: {self.cumulative_metrics.total_embeddings}")
+        self.logger.info(f"Successful: {self.cumulative_metrics.total_successful}")
+        self.logger.info(f"Failed: {self.cumulative_metrics.total_failed}")
         self.logger.info(f"Success rate: {self.cumulative_metrics.overall_success_rate:.1%}")
         self.logger.info(f"Overall rate: {self.cumulative_metrics.overall_embeddings_per_second:.2f} emb/s")
         self.logger.info(f"Total characters processed: {self.cumulative_metrics.total_chars:,}")
@@ -582,12 +728,48 @@ class EmbeddingService:
             else 0
         )
         self.logger.info(f"Overall API efficiency: {overall_efficiency:.2f} emb/call")
+
+        # Log failed items summary if any
+        if self.cumulative_metrics.all_failed_items:
+            self.logger.warning(f"=== Failed Embeddings Summary ({len(self.cumulative_metrics.all_failed_items)} items) ===")
+
+            # Group failures by file
+            failures_by_file: dict[str, list[FailedEmbeddingInfo]] = {}
+            for item in self.cumulative_metrics.all_failed_items:
+                file_key = item.file_path or "unknown"
+                if file_key not in failures_by_file:
+                    failures_by_file[file_key] = []
+                failures_by_file[file_key].append(item)
+
+            for file_path, items in failures_by_file.items():
+                self.logger.warning(f"  📁 {file_path}: {len(items)} failures")
+                for item in items[:3]:  # Show first 3 failures per file
+                    self.logger.warning(
+                        f"      - {item.chunk_type}:{item.chunk_name} (lines {item.start_line}-{item.end_line}): {item.error_message[:50]}"
+                    )
+                if len(items) > 3:
+                    self.logger.warning(f"      ... and {len(items) - 3} more")
+
         self.logger.info("=====================================")
 
     def get_metrics_summary(self) -> dict[str, Any]:
         """Get a summary of current metrics for external reporting."""
         if not self._metrics_enabled:
             return {"metrics_enabled": False}
+
+        # Convert failed items to dicts
+        failed_items_list = [
+            {
+                "index": item.index,
+                "error_message": item.error_message,
+                "file_path": item.file_path,
+                "chunk_name": item.chunk_name,
+                "chunk_type": item.chunk_type,
+                "start_line": item.start_line,
+                "end_line": item.end_line,
+            }
+            for item in self.cumulative_metrics.all_failed_items
+        ]
 
         return {
             "metrics_enabled": True,
@@ -604,7 +786,12 @@ class EmbeddingService:
                 "total_retry_attempts": self.cumulative_metrics.total_retry_attempts,
                 "total_subdivisions": self.cumulative_metrics.total_subdivisions,
             },
+            "failed_items": failed_items_list,
         }
+
+    def get_failed_items(self) -> list[FailedEmbeddingInfo]:
+        """Get the list of all failed embedding items."""
+        return self.cumulative_metrics.all_failed_items
 
     def reset_metrics(self) -> None:
         """Reset all metrics for a new operation."""
