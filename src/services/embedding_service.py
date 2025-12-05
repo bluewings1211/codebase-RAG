@@ -197,13 +197,7 @@ class EmbeddingService:
                     self.provider = self.PROVIDER_OLLAMA
                     self._mlx_service = None
 
-        except ImportError as e:
-            self.logger.warning(f"MLX service import failed: {e}")
-            if self._fallback_enabled:
-                self.provider = self.PROVIDER_OLLAMA
-            else:
-                raise
-        except Exception as e:
+        except (ImportError, Exception) as e:
             self.logger.warning(f"MLX provider initialization failed: {e}")
             if self._fallback_enabled:
                 self.provider = self.PROVIDER_OLLAMA

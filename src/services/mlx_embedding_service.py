@@ -4,7 +4,7 @@ MLX Server Embedding Service for high-performance Apple Silicon inference.
 This service integrates with the qwen3-embeddings-mlx server to provide
 significantly faster embedding generation on MacBooks with Apple Silicon.
 
-Performance benchmarks show MLX Server is 48-161x faster than Ollama:
+Performance benchmarks show MLX Server is ~48x faster than Ollama:
 - MLX Server (batch=128): ~1700 emb/s
 - MLX Server (batch=64): ~1646 emb/s
 - Ollama (nomic-embed-text): ~35 emb/s
@@ -15,23 +15,10 @@ Server: https://github.com/jakedahn/qwen3-embeddings-mlx
 import logging
 import os
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import requests
 import torch
-
-
-@dataclass
-class MLXBatchMetrics:
-    """Metrics for MLX batch processing."""
-
-    batch_size: int
-    total_chars: int
-    duration_seconds: float
-    embeddings_per_second: float
-    successful: int
-    failed: int
 
 
 class MLXServerEmbeddingService:
@@ -39,7 +26,7 @@ class MLXServerEmbeddingService:
     MLX Server embedding service for high-performance Apple Silicon inference.
 
     This service connects to a qwen3-embeddings-mlx server running locally,
-    providing batch embedding generation that is 48-161x faster than Ollama.
+    providing batch embedding generation that is ~48x faster than Ollama.
     """
 
     # Qwen3-Embedding models output 1024 dimensions
@@ -342,41 +329,20 @@ class MLXServerEmbeddingService:
             self.logger.warning(f"Batch API failed ({batch_error}), falling back to individual processing")
             return self._process_individually(texts, batch_start_index, chunk_metadata)
 
-    def _call_batch_api(self, texts: list[str], retry_count: int = 3) -> list:
-        """Call MLX server batch API with retries."""
-        last_error = None
+    def _call_batch_api(self, texts: list[str]) -> list:
+        """Call MLX server batch API."""
+        response = self._get_session().post(
+            f"{self.server_url}/embed_batch",
+            json={"texts": texts, "model": self.model_size},
+            timeout=self.timeout,
+        )
 
-        for attempt in range(retry_count):
-            try:
-                response = self._get_session().post(
-                    f"{self.server_url}/embed_batch",
-                    json={"texts": texts, "model": self.model_size},
-                    timeout=self.timeout,
-                )
+        # The session's retry mechanism handles transient errors.
+        # We just need to check the final status and raise if it's not successful.
+        response.raise_for_status()
 
-                if response.status_code == 200:
-                    result = response.json()
-                    return result.get("embeddings", [])
-
-                # Server error, may be retryable
-                if response.status_code >= 500:
-                    last_error = RuntimeError(f"Server error {response.status_code}: {response.text}")
-                    if attempt < retry_count - 1:
-                        wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
-                        self.logger.warning(f"MLX batch attempt {attempt + 1} failed, retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-
-                raise RuntimeError(f"MLX batch request failed: {response.text}")
-
-            except requests.exceptions.RequestException as e:
-                last_error = e
-                if attempt < retry_count - 1:
-                    wait_time = (attempt + 1) * 2
-                    self.logger.warning(f"MLX connection error on attempt {attempt + 1}: {e}, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-
-        raise last_error or RuntimeError("Batch API failed after retries")
+        result = response.json()
+        return result.get("embeddings", [])
 
     def _process_individually(
         self,
@@ -400,31 +366,25 @@ class MLXServerEmbeddingService:
 
         return results
 
-    def _generate_single_with_retry(self, text: str, retry_count: int = 3) -> torch.Tensor | None:
-        """Generate single embedding with retry logic."""
-        for attempt in range(retry_count):
-            try:
-                response = self._get_session().post(
-                    f"{self.server_url}/embed",
-                    json={"text": text, "model": self.model_size},
-                    timeout=self.timeout,
-                )
+    def _generate_single_with_retry(self, text: str) -> torch.Tensor | None:
+        """Generate single embedding."""
+        try:
+            response = self._get_session().post(
+                f"{self.server_url}/embed",
+                json={"text": text, "model": self.model_size},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
 
-                if response.status_code == 200:
-                    result = response.json()
-                    embedding = result.get("embedding")
-                    if embedding:
-                        return torch.tensor(embedding, dtype=torch.float32)
+            result = response.json()
+            embedding = result.get("embedding")
+            if embedding:
+                return torch.tensor(embedding, dtype=torch.float32)
 
-                if attempt < retry_count - 1:
-                    time.sleep((attempt + 1) * 1)
-
-            except requests.exceptions.RequestException as e:
-                self.logger.debug(f"Single embedding attempt {attempt + 1} failed: {e}")
-                if attempt < retry_count - 1:
-                    time.sleep((attempt + 1) * 1)
-
-        return None
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.debug(f"Single embedding request failed after retries: {e}")
+            return None
 
     def _log_failed_embedding(
         self,
