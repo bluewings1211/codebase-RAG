@@ -186,7 +186,7 @@ This command will start Qdrant and map its default ports (6333 for gRPC, 6334 fo
 
 ## High-Speed Indexing with MLX Server
 
-For dramatically faster embedding generation on Apple Silicon Macs, you can use the MLX Embedding Server instead of Ollama. This provides **48-161x faster** indexing performance.
+For dramatically faster embedding generation on Apple Silicon Macs, you can use the MLX Embedding Server instead of Ollama. This provides **~48x faster** indexing performance.
 
 ### Performance Comparison
 

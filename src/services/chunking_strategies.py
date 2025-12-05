@@ -352,7 +352,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
                 chunk_id=chunk_id,
                 file_path=file_path,
                 content=chunk_content,
-                chunk_type=ChunkType.WHOLE_FILE,  # Still marked as WHOLE_FILE for compatibility
+                chunk_type=ChunkType.RAW_CODE,  # Use RAW_CODE for split file parts
                 language=self.language,
                 start_line=start_line + 1,  # 1-indexed
                 end_line=end_line,
@@ -409,10 +409,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
 
         best_split = target_end
 
-        for i in range(target_end, search_start, -1):
-            if i >= len(lines):
-                continue
-
+        for i in range(target_end - 1, search_start - 1, -1):
             line = lines[i].strip()
 
             # Empty line is a great split point
