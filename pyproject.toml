@@ -24,6 +24,7 @@ dependencies = [
     "tree-sitter-rust==0.21.2",
     "tree-sitter-java",
     "tree-sitter-cpp",
+    "requests>=2.31.0,<3",
 ]
 
 [dependency-groups]

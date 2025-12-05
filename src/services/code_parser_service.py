@@ -25,6 +25,7 @@ from services.chunking_strategies import (
 # Import the new refactored services
 from services.language_support_service import LanguageSupportService
 from utils.chunking_metrics_tracker import chunking_metrics_tracker
+from utils.fallback_tracker import fallback_tracker
 from utils.file_system_utils import get_file_mtime, get_file_size
 
 
@@ -198,8 +199,16 @@ class CodeParserService:
             self.logger.error(f"Failed to read file {file_path}: {e}")
             return None
 
-    def _get_chunking_strategy(self, language: str):
-        """Get the appropriate chunking strategy for a language."""
+    def _get_chunking_strategy(self, language: str, fallback_reason: str = "language_not_supported"):
+        """Get the appropriate chunking strategy for a language.
+
+        Args:
+            language: The programming language
+            fallback_reason: Reason for using fallback if needed
+
+        Returns:
+            Appropriate chunking strategy
+        """
         strategy = chunking_strategy_registry.get_strategy(language)
         if strategy:
             return strategy
@@ -208,7 +217,8 @@ class CodeParserService:
         if language in ["json", "yaml", "markdown"]:
             return StructuredFileChunkingStrategy(language)
         else:
-            return FallbackChunkingStrategy(language)
+            self.logger.warning(f"No Tree-sitter strategy for language '{language}' - using fallback chunking")
+            return FallbackChunkingStrategy(language, reason=fallback_reason)
 
     def _validate_and_enhance_chunks(self, chunks: list[CodeChunk], language: str, strategy) -> list[CodeChunk]:
         """Validate and enhance chunks with additional metadata."""
@@ -294,6 +304,28 @@ class CodeParserService:
             "strategy_usage": {},
             "error_recovery_count": 0,
         }
+        # Also reset fallback tracker
+        fallback_tracker.reset()
+
+    def get_fallback_report(self) -> dict:
+        """Get a report of fallback chunking usage.
+
+        Returns:
+            Dictionary with fallback usage statistics and recommendations
+        """
+        return fallback_tracker.get_summary()
+
+    def log_fallback_report(self) -> None:
+        """Log a formatted report of fallback usage to help identify languages needing support."""
+        fallback_tracker.log_report()
+
+    def get_recommended_tree_sitter_languages(self) -> list[dict]:
+        """Get a prioritized list of languages that would benefit from Tree-sitter support.
+
+        Returns:
+            List of dictionaries with extension, language name, and priority info
+        """
+        return fallback_tracker.get_recommended_languages()
 
     def _create_fallback_result(
         self,
@@ -311,8 +343,21 @@ class CodeParserService:
         processing_time = (time.time() - start_time) * 1000
         language = self.detect_language(file_path) or "unknown"
 
+        # Determine fallback reason
+        if error_message:
+            if "not supported" in error_message.lower():
+                fallback_reason = "language_not_supported"
+            elif "parser" in error_message.lower():
+                fallback_reason = "parser_unavailable"
+            else:
+                fallback_reason = "parse_error"
+        elif exception_context:
+            fallback_reason = "parse_error"
+        else:
+            fallback_reason = "language_not_supported"
+
         # Create a simple whole-file chunk using fallback strategy
-        fallback_strategy = FallbackChunkingStrategy(language)
+        fallback_strategy = FallbackChunkingStrategy(language, reason=fallback_reason)
         chunks = []
 
         if content:
