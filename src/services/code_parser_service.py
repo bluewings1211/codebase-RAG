@@ -118,8 +118,8 @@ class CodeParserService:
             strategy = self._get_chunking_strategy(language)
 
             # Step 4: Execute chunking based on strategy type
-            if language in ["json", "yaml", "markdown"]:
-                # Use structured file chunking
+            if language in ["json", "yaml", "markdown", "plaintext"]:
+                # Use structured file chunking (no AST needed)
                 chunks = strategy.extract_chunks(None, file_path, content)
                 parse_success = True
                 error_count = 0
@@ -216,6 +216,11 @@ class CodeParserService:
         # Fallback to language-specific fallback strategy
         if language in ["json", "yaml", "markdown"]:
             return StructuredFileChunkingStrategy(language)
+        elif language == "plaintext":
+            # Import PlainTextChunkingStrategy
+            from services.chunking_strategies import PlainTextChunkingStrategy
+
+            return PlainTextChunkingStrategy(language)
         else:
             self.logger.warning(f"No Tree-sitter strategy for language '{language}' - using fallback chunking")
             return FallbackChunkingStrategy(language, reason=fallback_reason)
