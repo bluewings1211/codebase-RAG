@@ -660,6 +660,11 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
 
     This strategy handles Python-specific constructs like functions, classes,
     decorators, async functions, and module-level constants.
+
+    For classes, this strategy uses "skeleton mode" - extracting only the class
+    definition header, docstring, and class-level attributes, while methods are
+    extracted as separate chunks. This avoids duplicate content and keeps chunks
+    within reasonable size limits.
     """
 
     def get_node_mappings(self) -> dict[ChunkType, list[str]]:
@@ -673,9 +678,23 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
         }
 
     def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
-        """Extract Python-specific chunks from the AST."""
-        node_mappings = self.get_node_mappings()
-        chunks = self.ast_extractor.extract_chunks(root_node, file_path, content, self.language, node_mappings)
+        """
+        Extract Python-specific chunks from the AST.
+
+        Uses skeleton mode for classes: extracts class definition + docstring +
+        class attributes as a compact chunk, while methods are extracted separately.
+        """
+        chunks = []
+        content_lines = content.split("\n")
+
+        # Use custom traversal that handles class skeleton extraction
+        self._traverse_python_ast(
+            root_node,
+            chunks,
+            file_path,
+            content,
+            content_lines,
+        )
 
         # Python-specific post-processing
         processed_chunks = []
@@ -683,7 +702,7 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
             # Enhanced validation for Python
             if self._is_valid_python_chunk(chunk):
                 # Add Python-specific metadata
-                additional_metadata = self.extract_additional_metadata(root_node, chunk)
+                additional_metadata = self._extract_chunk_metadata(chunk)
                 if additional_metadata:
                     chunk.metadata = getattr(chunk, "metadata", {})
                     chunk.metadata.update(additional_metadata)
@@ -691,6 +710,356 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
                 processed_chunks.append(chunk)
 
         return self.post_process_chunks(processed_chunks)
+
+    def _traverse_python_ast(
+        self,
+        node: Node,
+        chunks: list[CodeChunk],
+        file_path: str,
+        content: str,
+        content_lines: list[str],
+        inside_class: bool = False,
+    ) -> None:
+        """
+        Custom AST traversal for Python with class skeleton extraction.
+
+        Args:
+            node: Current AST node
+            chunks: List to collect extracted chunks
+            file_path: Path to the source file
+            content: Original file content
+            content_lines: Content split into lines
+            inside_class: Whether we're currently inside a class body
+        """
+        if node.type == "class_definition":
+            # Extract class skeleton (definition + docstring + class attributes)
+            skeleton_chunk = self._extract_class_skeleton(node, file_path, content_lines)
+            if skeleton_chunk:
+                chunks.append(skeleton_chunk)
+
+            # Continue traversing to extract methods as separate chunks
+            for child in node.children:
+                if child.type == "block":
+                    # Traverse the class body to find methods
+                    for body_child in child.children:
+                        self._traverse_python_ast(
+                            body_child,
+                            chunks,
+                            file_path,
+                            content,
+                            content_lines,
+                            inside_class=True,
+                        )
+            return
+
+        elif node.type == "decorated_definition":
+            # Handle decorated classes and functions
+            # Find the actual definition inside
+            for child in node.children:
+                if child.type == "class_definition":
+                    # Decorated class - extract skeleton
+                    skeleton_chunk = self._extract_class_skeleton(child, file_path, content_lines)
+                    if skeleton_chunk:
+                        # Include decorators in the skeleton
+                        decorators = self._extract_decorators_from_decorated(node, content_lines)
+                        if decorators:
+                            skeleton_chunk.content = decorators + "\n" + skeleton_chunk.content
+                            skeleton_chunk.start_line = node.start_point[0] + 1
+                            if skeleton_chunk.metadata is None:
+                                skeleton_chunk.metadata = {}
+                            skeleton_chunk.metadata["decorators"] = decorators.split("\n")
+                        chunks.append(skeleton_chunk)
+
+                    # Continue traversing to extract methods
+                    for class_child in child.children:
+                        if class_child.type == "block":
+                            for body_child in class_child.children:
+                                self._traverse_python_ast(
+                                    body_child,
+                                    chunks,
+                                    file_path,
+                                    content,
+                                    content_lines,
+                                    inside_class=True,
+                                )
+                    return
+
+                elif child.type == "function_definition":
+                    # Decorated function/method - extract the whole decorated definition
+                    chunk = self.ast_extractor.create_chunk_from_node(
+                        node,  # Use the decorated_definition node to include decorators
+                        ChunkType.METHOD if inside_class else ChunkType.FUNCTION,
+                        file_path,
+                        content,
+                        content_lines,
+                        self.language,
+                    )
+                    if chunk:
+                        chunks.append(chunk)
+                    return
+            return
+
+        elif node.type == "function_definition":
+            # Extract function/method as a chunk
+            chunk = self.ast_extractor.create_chunk_from_node(
+                node,
+                ChunkType.METHOD if inside_class else ChunkType.FUNCTION,
+                file_path,
+                content,
+                content_lines,
+                self.language,
+            )
+            if chunk:
+                chunks.append(chunk)
+            # Don't traverse into function body for nested functions (optional)
+            return
+
+        elif node.type == "assignment":
+            # Only extract module-level constants
+            if not inside_class and self._is_python_constant(node):
+                chunk = self.ast_extractor.create_chunk_from_node(
+                    node,
+                    ChunkType.CONSTANT,
+                    file_path,
+                    content,
+                    content_lines,
+                    self.language,
+                )
+                if chunk:
+                    chunks.append(chunk)
+
+        # Recursively process children
+        for child in node.children:
+            self._traverse_python_ast(
+                child,
+                chunks,
+                file_path,
+                content,
+                content_lines,
+                inside_class=inside_class,
+            )
+
+    def _extract_decorators_from_decorated(self, decorated_node: Node, content_lines: list[str]) -> str:
+        """Extract decorator lines from a decorated_definition node."""
+        decorators = []
+        for child in decorated_node.children:
+            if child.type == "decorator":
+                start_line = child.start_point[0]
+                end_line = child.end_point[0]
+                for i in range(start_line, end_line + 1):
+                    if i < len(content_lines):
+                        decorators.append(content_lines[i])
+        return "\n".join(decorators)
+
+    def _extract_class_skeleton(
+        self,
+        node: Node,
+        file_path: str,
+        content_lines: list[str],
+    ) -> CodeChunk | None:
+        """
+        Extract a class skeleton chunk containing only:
+        - Class definition line (with decorators and inheritance)
+        - Docstring
+        - Class-level attributes (not inside methods)
+
+        Args:
+            node: Class definition AST node
+            file_path: Path to the source file
+            content_lines: Content split into lines
+
+        Returns:
+            CodeChunk with class skeleton or None if extraction failed
+        """
+        import hashlib
+
+        try:
+            # Get class name
+            class_name = None
+            for child in node.children:
+                if child.type == "identifier":
+                    class_name = child.text.decode("utf-8")
+                    break
+
+            if not class_name:
+                return None
+
+            # Calculate line numbers (Tree-sitter is 0-indexed)
+            start_line = node.start_point[0] + 1
+
+            # Build skeleton content
+            skeleton_parts = []
+
+            # 1. Extract decorators (if any, they appear before the class)
+            decorators = self._extract_decorators(node)
+
+            # 2. Extract class definition line
+            class_def_line = content_lines[node.start_point[0]]
+            skeleton_parts.append(class_def_line)
+
+            # 3. Find and extract docstring and class attributes from the block
+            docstring = None
+            class_attributes = []
+            skeleton_end_line = start_line
+
+            for child in node.children:
+                if child.type == "block":
+                    first_stmt = True
+                    for stmt in child.children:
+                        # Skip newlines and other non-statement nodes
+                        if stmt.type in [":", "newline", "indent", "dedent", "NEWLINE"]:
+                            continue
+
+                        # Check for docstring (first expression_statement with string)
+                        if first_stmt and stmt.type == "expression_statement":
+                            for expr in stmt.children:
+                                if expr.type == "string":
+                                    docstring = expr.text.decode("utf-8")
+                                    # Add docstring to skeleton
+                                    indent = "    "  # Standard Python indent
+                                    skeleton_parts.append(f"{indent}{docstring}")
+                                    skeleton_end_line = stmt.end_point[0] + 1
+                                    break
+                            first_stmt = False
+                            continue
+
+                        first_stmt = False
+
+                        # Check for class-level assignments (attributes)
+                        if stmt.type == "expression_statement":
+                            # Check if it's a simple assignment (class attribute)
+                            for expr in stmt.children:
+                                if expr.type == "assignment":
+                                    attr_text = expr.text.decode("utf-8")
+                                    indent = "    "
+                                    skeleton_parts.append(f"{indent}{attr_text}")
+                                    class_attributes.append(attr_text)
+                                    skeleton_end_line = stmt.end_point[0] + 1
+
+                        # Check for annotated assignments (type-hinted class attributes)
+                        elif stmt.type == "annotated_assignment":
+                            attr_text = stmt.text.decode("utf-8")
+                            indent = "    "
+                            skeleton_parts.append(f"{indent}{attr_text}")
+                            class_attributes.append(attr_text)
+                            skeleton_end_line = stmt.end_point[0] + 1
+
+                        # Stop when we hit a function definition (method)
+                        elif stmt.type == "function_definition":
+                            break
+
+                        # Also stop at decorated definitions
+                        elif stmt.type == "decorated_definition":
+                            break
+
+            # Add a placeholder comment for methods
+            method_count = self._count_methods(node)
+            if method_count > 0:
+                skeleton_parts.append(f"    # ... {method_count} method(s)")
+
+            # Join skeleton content
+            skeleton_content = "\n".join(skeleton_parts)
+
+            # Create content hash
+            content_hash = hashlib.md5(skeleton_content.encode("utf-8")).hexdigest()
+
+            # Generate chunk_id
+            chunk_id = f"{file_path}:class:{class_name}:{content_hash[:8]}"
+
+            # Extract inheritance info for signature
+            inheritance = self._extract_class_inheritance(node)
+            signature = f"({', '.join(inheritance)})" if inheritance else None
+
+            # Create the skeleton chunk
+            chunk = CodeChunk(
+                chunk_id=chunk_id,
+                file_path=file_path,
+                content=skeleton_content,
+                chunk_type=ChunkType.CLASS,
+                language=self.language,
+                start_line=start_line,
+                end_line=skeleton_end_line,
+                start_byte=node.start_byte,
+                end_byte=node.start_byte + len(skeleton_content.encode("utf-8")),
+                name=class_name,
+                signature=signature,
+                docstring=self._clean_docstring(docstring) if docstring else None,
+                content_hash=content_hash,
+            )
+
+            # Add metadata
+            chunk.metadata = {
+                "is_skeleton": True,
+                "method_count": method_count,
+                "class_attributes": class_attributes,
+                "original_end_line": node.end_point[0] + 1,
+            }
+
+            if decorators:
+                chunk.metadata["decorators"] = decorators
+
+            if inheritance:
+                chunk.metadata["inheritance"] = inheritance
+
+            return chunk
+
+        except Exception as e:
+            self.logger.error(f"Failed to extract class skeleton: {e}")
+            return None
+
+    def _count_methods(self, class_node: Node) -> int:
+        """Count the number of methods in a class."""
+        count = 0
+        for child in class_node.children:
+            if child.type == "block":
+                for stmt in child.children:
+                    if stmt.type == "function_definition":
+                        count += 1
+                    elif stmt.type == "decorated_definition":
+                        # Check if the decorated item is a function
+                        for subchild in stmt.children:
+                            if subchild.type == "function_definition":
+                                count += 1
+                                break
+        return count
+
+    def _clean_docstring(self, docstring: str) -> str:
+        """Clean docstring by removing triple quotes and extra whitespace."""
+        result = docstring
+        # Remove triple double quotes
+        if result.startswith('"""'):
+            result = result[3:]
+        if result.endswith('"""'):
+            result = result[:-3]
+        # Remove triple single quotes
+        if result.startswith("'''"):
+            result = result[3:]
+        if result.endswith("'''"):
+            result = result[:-3]
+        return result.strip()
+
+    def _extract_chunk_metadata(self, chunk: CodeChunk) -> dict[str, any]:
+        """Extract Python-specific metadata for a chunk."""
+        metadata = {}
+
+        # For methods/functions, check for async
+        if chunk.chunk_type in [ChunkType.FUNCTION, ChunkType.METHOD]:
+            if "async def" in chunk.content:
+                metadata["is_async"] = True
+
+            # Check for decorators in the content
+            lines = chunk.content.split("\n")
+            decorators = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("@"):
+                    decorators.append(stripped)
+                elif stripped.startswith("def ") or stripped.startswith("async def"):
+                    break
+            if decorators:
+                metadata["decorators"] = decorators
+
+        return metadata
 
     def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
         """Determine if a Python node should be included as a chunk."""
@@ -744,9 +1113,9 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
             return False
 
         # Python-specific validations
-        if chunk.chunk_type == ChunkType.FUNCTION:
-            # Function should have a name and some content
-            return chunk.name and chunk.name != "unnamed_function"
+        if chunk.chunk_type in [ChunkType.FUNCTION, ChunkType.METHOD]:
+            # Function/method should have a name and some content
+            return chunk.name and chunk.name != "unnamed_function" and chunk.name != "unnamed_method"
 
         elif chunk.chunk_type == ChunkType.CLASS:
             # Class should have a name

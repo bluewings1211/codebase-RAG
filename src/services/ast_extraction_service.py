@@ -394,6 +394,12 @@ class AstExtractionService:
                 if child.type == "identifier":
                     return child.text.decode("utf-8")
 
+        elif node.type == "decorated_definition":
+            # Handle decorated functions/classes - find the actual definition inside
+            for child in node.children:
+                if child.type in ["function_definition", "class_definition"]:
+                    return self._extract_python_name(child)
+
         elif node.type == "assignment":
             # Get the left side of assignment
             if node.children and node.children[0].type == "identifier":
