@@ -30,6 +30,20 @@ class FailedEmbeddingInfo:
 
 
 @dataclass
+class SlowApiResponseInfo:
+    """Information about a slow API response for performance tracking."""
+
+    index: int
+    duration_seconds: float
+    file_path: str = ""
+    chunk_name: str = ""
+    chunk_type: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    text_length: int = 0
+
+
+@dataclass
 class BatchMetrics:
     """Metrics for tracking batch processing performance."""
 
@@ -44,6 +58,7 @@ class BatchMetrics:
     retry_attempts: int = 0
     subdivisions: int = 0
     failed_items: list[FailedEmbeddingInfo] = field(default_factory=list)
+    slow_api_responses: list[SlowApiResponseInfo] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -91,6 +106,7 @@ class CumulativeMetrics:
     start_time: float = field(default_factory=time.time)
     end_time: float | None = None
     all_failed_items: list[FailedEmbeddingInfo] = field(default_factory=list)
+    all_slow_api_responses: list[SlowApiResponseInfo] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -131,7 +147,7 @@ class EmbeddingService:
     PROVIDER_OLLAMA = "ollama"
     PROVIDER_MLX_SERVER = "mlx_server"
 
-    # Default embedding dimensions by provider
+    # Default embedding dimensions by provider (fallback if detection fails)
     OLLAMA_DEFAULT_DIMENSION = 768  # nomic-embed-text
     MLX_DEFAULT_DIMENSION = 1024  # Qwen3-Embedding
 
@@ -154,8 +170,12 @@ class EmbeddingService:
         # Now initialize other components that may use the logger
         self.device = self._get_device()
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")  # Default Ollama host
+        self.ollama_model = os.getenv("OLLAMA_DEFAULT_EMBEDDING_MODEL", "nomic-embed-text")
         self.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
         self.max_batch_chars = int(os.getenv("MAX_BATCH_CHARS", "50000"))  # Max chars per batch
+
+        # Cached Ollama embedding dimension (detected dynamically)
+        self._ollama_embedding_dimension: int | None = None
 
         # Retry configuration
         self.max_retries = int(os.getenv("EMBEDDING_MAX_RETRIES", "3"))
@@ -622,7 +642,7 @@ class EmbeddingService:
 
                     # Log individual API response time for debugging
                     if individual_duration > 5.0:  # Log slow API calls
-                        self.logger.warning(f"Slow API response for index {original_index}: {individual_duration:.2f}s")
+                        self._log_slow_api_response(original_index, individual_duration, text)
 
                     if not response.get("embedding") or len(response["embedding"]) == 0:
                         self._log_embedding_error(original_index, "Received empty embedding", text)
@@ -701,6 +721,72 @@ class EmbeddingService:
         except Exception as e:
             self.logger.error(f"Core batch processing failed after all retries: {e}")
             return None
+
+    def _log_slow_api_response(self, original_index: int, duration: float, text: str) -> None:
+        """Log detailed slow API response with chunk metadata if available."""
+        # Try to get metadata for this index
+        chunk_info = ""
+        file_path = "unknown"
+        chunk_name = "unknown"
+        chunk_type = "unknown"
+        start_line = 0
+        end_line = 0
+
+        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
+            meta = self._current_batch_metadata[original_index]
+            file_path = meta.get("file_path", "unknown")
+            chunk_name = meta.get("name", "unknown")
+            chunk_type = meta.get("chunk_type", "unknown")
+            # Support both naming conventions: line_start/line_end and start_line/end_line
+            start_line = meta.get("line_start") or meta.get("start_line", 0)
+            end_line = meta.get("line_end") or meta.get("end_line", 0)
+
+            chunk_info = f" - {file_path} [{chunk_type}:{chunk_name}] (lines {start_line}-{end_line})"
+
+        text_length = len(text) if text else 0
+        self.logger.warning(f"⏱️  Slow API response for index {original_index}: {duration:.2f}s ({text_length} chars){chunk_info}")
+
+        # Record for summary report
+        self._record_slow_api_response(original_index, duration, text)
+
+    def _record_slow_api_response(self, original_index: int, duration: float, text: str) -> None:
+        """Record a slow API response for later reporting."""
+        if not self._metrics_enabled:
+            return
+
+        # Get metadata if available
+        file_path = ""
+        chunk_name = ""
+        chunk_type = ""
+        start_line = 0
+        end_line = 0
+
+        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
+            meta = self._current_batch_metadata[original_index]
+            file_path = meta.get("file_path", "")
+            chunk_name = meta.get("name", "")
+            chunk_type = meta.get("chunk_type", "")
+            # Support both naming conventions: line_start/line_end and start_line/end_line
+            start_line = meta.get("line_start") or meta.get("start_line", 0)
+            end_line = meta.get("line_end") or meta.get("end_line", 0)
+
+        slow_info = SlowApiResponseInfo(
+            index=original_index,
+            duration_seconds=duration,
+            file_path=file_path,
+            chunk_name=chunk_name,
+            chunk_type=chunk_type,
+            start_line=start_line,
+            end_line=end_line,
+            text_length=len(text) if text else 0,
+        )
+
+        # Add to current batch metrics
+        if self.current_batch_metrics:
+            self.current_batch_metrics.slow_api_responses.append(slow_info)
+
+        # Also add to cumulative metrics
+        self.cumulative_metrics.all_slow_api_responses.append(slow_info)
 
     def _log_embedding_error(self, original_index: int, error_message: str, text: str) -> None:
         """Log detailed embedding error with chunk metadata if available."""
@@ -867,6 +953,47 @@ class EmbeddingService:
                 if len(items) > 3:
                     self.logger.warning(f"      ... and {len(items) - 3} more")
 
+        # Log slow API responses summary if any
+        if self.cumulative_metrics.all_slow_api_responses:
+            slow_items = self.cumulative_metrics.all_slow_api_responses
+            total_slow_time = sum(item.duration_seconds for item in slow_items)
+            avg_slow_time = total_slow_time / len(slow_items) if slow_items else 0
+
+            self.logger.warning(f"=== Slow API Responses Summary ({len(slow_items)} items, total: {total_slow_time:.1f}s) ===")
+
+            # Group slow responses by file
+            slow_by_file: dict[str, list[SlowApiResponseInfo]] = {}
+            for item in slow_items:
+                file_key = item.file_path or "unknown"
+                if file_key not in slow_by_file:
+                    slow_by_file[file_key] = []
+                slow_by_file[file_key].append(item)
+
+            # Sort by total time per file (descending)
+            sorted_files = sorted(
+                slow_by_file.items(),
+                key=lambda x: sum(item.duration_seconds for item in x[1]),
+                reverse=True,
+            )
+
+            for file_path, items in sorted_files[:10]:  # Show top 10 slowest files
+                file_total_time = sum(item.duration_seconds for item in items)
+                self.logger.warning(f"  📁 {file_path}: {len(items)} slow responses ({file_total_time:.1f}s total)")
+                # Sort items by duration within each file
+                sorted_items = sorted(items, key=lambda x: x.duration_seconds, reverse=True)
+                for item in sorted_items[:3]:  # Show top 3 slowest chunks per file
+                    self.logger.warning(
+                        f"      - {item.chunk_type}:{item.chunk_name} (lines {item.start_line}-{item.end_line}): "
+                        f"{item.duration_seconds:.2f}s ({item.text_length} chars)"
+                    )
+                if len(items) > 3:
+                    self.logger.warning(f"      ... and {len(items) - 3} more")
+
+            if len(sorted_files) > 10:
+                self.logger.warning(f"  ... and {len(sorted_files) - 10} more files with slow responses")
+
+            self.logger.info(f"Average slow response time: {avg_slow_time:.2f}s")
+
         self.logger.info("=====================================")
 
     def get_metrics_summary(self) -> dict[str, Any]:
@@ -888,6 +1015,34 @@ class EmbeddingService:
             for item in self.cumulative_metrics.all_failed_items
         ]
 
+        # Convert slow API responses to dicts
+        slow_api_responses_list = [
+            {
+                "index": item.index,
+                "duration_seconds": item.duration_seconds,
+                "file_path": item.file_path,
+                "chunk_name": item.chunk_name,
+                "chunk_type": item.chunk_type,
+                "start_line": item.start_line,
+                "end_line": item.end_line,
+                "text_length": item.text_length,
+            }
+            for item in self.cumulative_metrics.all_slow_api_responses
+        ]
+
+        # Calculate slow API response statistics
+        slow_api_stats = {}
+        if self.cumulative_metrics.all_slow_api_responses:
+            slow_items = self.cumulative_metrics.all_slow_api_responses
+            total_slow_time = sum(item.duration_seconds for item in slow_items)
+            slow_api_stats = {
+                "total_count": len(slow_items),
+                "total_time_seconds": total_slow_time,
+                "average_time_seconds": total_slow_time / len(slow_items),
+                "max_time_seconds": max(item.duration_seconds for item in slow_items),
+                "min_time_seconds": min(item.duration_seconds for item in slow_items),
+            }
+
         return {
             "metrics_enabled": True,
             "cumulative": {
@@ -904,11 +1059,17 @@ class EmbeddingService:
                 "total_subdivisions": self.cumulative_metrics.total_subdivisions,
             },
             "failed_items": failed_items_list,
+            "slow_api_responses": slow_api_responses_list,
+            "slow_api_stats": slow_api_stats,
         }
 
     def get_failed_items(self) -> list[FailedEmbeddingInfo]:
         """Get the list of all failed embedding items."""
         return self.cumulative_metrics.all_failed_items
+
+    def get_slow_api_responses(self) -> list[SlowApiResponseInfo]:
+        """Get the list of all slow API response items."""
+        return self.cumulative_metrics.all_slow_api_responses
 
     def reset_metrics(self) -> None:
         """Reset all metrics for a new operation."""
@@ -941,15 +1102,54 @@ class EmbeddingService:
         self.logger.warning("generate_embedding is deprecated, use generate_embeddings instead")
         return self._generate_single_embedding(model, text)
 
+    def _detect_ollama_embedding_dimension(self) -> int:
+        """Detect the embedding dimension for the configured Ollama model.
+
+        Generates a test embedding to determine the actual dimension of the model.
+        The result is cached to avoid repeated API calls.
+
+        Returns:
+            int: Detected embedding dimension, or default if detection fails
+        """
+        # Return cached value if available
+        if self._ollama_embedding_dimension is not None:
+            return self._ollama_embedding_dimension
+
+        try:
+            self.logger.info(f"Detecting embedding dimension for Ollama model: {self.ollama_model}")
+            client = ollama.Client(host=self.ollama_host)
+
+            # Generate a test embedding with a simple text
+            response = client.embeddings(model=self.ollama_model, prompt="test")
+
+            if response.get("embedding"):
+                dimension = len(response["embedding"])
+                self._ollama_embedding_dimension = dimension
+                self.logger.info(f"Detected Ollama embedding dimension: {dimension} (model: {self.ollama_model})")
+                return dimension
+            else:
+                self.logger.warning(
+                    f"Could not detect embedding dimension for {self.ollama_model}, " f"using default: {self.OLLAMA_DEFAULT_DIMENSION}"
+                )
+                return self.OLLAMA_DEFAULT_DIMENSION
+
+        except Exception as e:
+            self.logger.warning(f"Failed to detect Ollama embedding dimension: {e}. " f"Using default: {self.OLLAMA_DEFAULT_DIMENSION}")
+            return self.OLLAMA_DEFAULT_DIMENSION
+
     def get_embedding_dimension(self) -> int:
         """Get the embedding dimension for the current provider.
 
+        For Ollama, this dynamically detects the dimension by querying the model.
+        The result is cached for subsequent calls.
+
         Returns:
-            int: Embedding dimension (1024 for MLX/Qwen3, 768 for Ollama/nomic-embed-text)
+            int: Embedding dimension for the configured model
         """
         if self.provider == self.PROVIDER_MLX_SERVER and self._mlx_service:
             return self._mlx_service.get_embedding_dimension()
-        return self.OLLAMA_DEFAULT_DIMENSION
+        # Dynamically detect Ollama model dimension
+        return self._detect_ollama_embedding_dimension()
 
     def get_provider_info(self) -> dict[str, Any]:
         """Get information about the current embedding provider.
@@ -975,8 +1175,9 @@ class EmbeddingService:
             info.update(
                 {
                     "host": self.ollama_host,
+                    "model": self.ollama_model,
                     "batch_size": self.embedding_batch_size,
-                    "embedding_dimension": self.OLLAMA_DEFAULT_DIMENSION,
+                    "embedding_dimension": self.get_embedding_dimension(),
                 }
             )
 
