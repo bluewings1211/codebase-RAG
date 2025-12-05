@@ -38,15 +38,18 @@ class MLXServerEmbeddingService:
         batch_size: int | None = None,
         timeout: int | None = None,
         model_size: str | None = None,
+        max_batch_chars: int | None = None,
     ):
         """
         Initialize the MLX Server embedding service.
 
         Args:
             server_url: MLX server URL (default: from env or http://localhost:8000)
-            batch_size: Batch size for embedding requests (default: from env or 64)
+            batch_size: Max texts per batch (default: from env or 64)
             timeout: Request timeout in seconds (default: from env or 120)
             model_size: Model size to use: 'small', 'medium', 'large' (default: from env or 'small')
+            max_batch_chars: Max characters per batch for optimal performance (default: from env or 15000)
+                           Lower values = faster per-batch response, higher throughput
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self._setup_logging()
@@ -56,6 +59,9 @@ class MLXServerEmbeddingService:
         self.batch_size = batch_size or int(os.getenv("MLX_BATCH_SIZE", "64"))
         self.timeout = timeout or int(os.getenv("MLX_TIMEOUT", "120"))
         self.model_size = model_size or os.getenv("MLX_MODEL_SIZE", "small")
+        # Character-based batching for consistent performance
+        # 15000 chars ≈ 30 emb/s, 50000 chars ≈ 10 emb/s
+        self.max_batch_chars = max_batch_chars or int(os.getenv("MLX_MAX_BATCH_CHARS", "15000"))
 
         # Session for connection pooling
         self._session: requests.Session | None = None
@@ -68,7 +74,7 @@ class MLXServerEmbeddingService:
         self.logger.info(
             f"MLX Server embedding service initialized - "
             f"URL: {self.server_url}, batch_size: {self.batch_size}, "
-            f"model: {self.model_size}"
+            f"max_batch_chars: {self.max_batch_chars}, model: {self.model_size}"
         )
 
     def _setup_logging(self) -> None:
@@ -210,7 +216,8 @@ class MLXServerEmbeddingService:
         Generate embeddings for a batch of texts using MLX server.
 
         This is the primary method for high-performance embedding generation.
-        Texts are automatically split into optimal batch sizes.
+        Texts are automatically split into optimal batch sizes based on
+        character count for consistent performance.
 
         Args:
             texts: List of texts to embed
@@ -229,55 +236,108 @@ class MLXServerEmbeddingService:
         successful = 0
         failed = 0
 
-        # Process in batches
-        for batch_start in range(0, len(texts), self.batch_size):
-            batch_end = min(batch_start + self.batch_size, len(texts))
-            batch_texts = texts[batch_start:batch_end]
+        # Create character-based batches for optimal performance
+        batches = self._create_char_based_batches(texts)
+        total_batches = len(batches)
 
-            batch_num = batch_start // self.batch_size + 1
-            total_batches = (len(texts) + self.batch_size - 1) // self.batch_size
+        self.logger.info(
+            f"MLX Server: Created {total_batches} batches " f"(max {self.max_batch_chars} chars/batch, max {self.batch_size} texts/batch)"
+        )
+
+        # Process each batch
+        for batch_num, (batch_texts, batch_start_idx) in enumerate(batches, 1):
+            batch_chars = sum(len(t) for t in batch_texts)
 
             try:
-                batch_embeddings = self._process_batch(batch_texts, batch_start, chunk_metadata)
+                batch_embeddings = self._process_batch(batch_texts, batch_start_idx, chunk_metadata)
 
                 for i, emb in enumerate(batch_embeddings):
                     if emb is not None:
                         successful += 1
                     else:
                         failed += 1
-                        self._log_failed_embedding(batch_start + i, chunk_metadata)
+                        self._log_failed_embedding(batch_start_idx + i, chunk_metadata)
 
                 all_embeddings.extend(batch_embeddings)
 
                 # Progress logging at intervals
                 if total_batches > 5 and batch_num % 5 == 0:
-                    self.logger.info(
-                        f"  MLX progress: {batch_num}/{total_batches} batches "
-                        f"({successful}/{batch_start + len(batch_texts)} successful)"
-                    )
+                    elapsed = time.time() - start_time
+                    rate = successful / elapsed if elapsed > 0 else 0
+                    self.logger.info(f"  MLX progress: {batch_num}/{total_batches} batches, " f"{successful} embeddings ({rate:.1f} emb/s)")
 
             except Exception as e:
-                self.logger.error(f"Batch {batch_num} failed: {e}")
+                self.logger.error(f"Batch {batch_num} failed ({len(batch_texts)} texts, {batch_chars} chars): {e}")
                 # Add None for all items in failed batch
                 for i in range(len(batch_texts)):
                     all_embeddings.append(None)
                     failed += 1
-                    self._log_failed_embedding(batch_start + i, chunk_metadata)
+                    self._log_failed_embedding(batch_start_idx + i, chunk_metadata)
 
         # Update metrics
         duration = time.time() - start_time
         self._total_embeddings += successful
         self._total_time += duration
-        self._total_batches += (len(texts) + self.batch_size - 1) // self.batch_size
+        self._total_batches += total_batches
 
         # Log summary
-        rate = len(texts) / duration if duration > 0 else 0
-        self.logger.info(f"MLX Server: Completed {successful}/{len(texts)} embeddings " f"in {duration:.2f}s ({rate:.1f} emb/s)")
+        rate = successful / duration if duration > 0 else 0
+        self.logger.info(f"MLX Server: Completed {successful}/{len(texts)} embeddings in {duration:.2f}s ({rate:.1f} emb/s)")
 
         if failed > 0:
             self.logger.warning(f"MLX Server: {failed} embeddings failed")
 
         return all_embeddings
+
+    def _create_char_based_batches(self, texts: list[str]) -> list[tuple[list[str], int]]:
+        """
+        Create batches based on character count for consistent performance.
+
+        Each batch will have at most max_batch_chars total characters and
+        at most batch_size texts.
+
+        Args:
+            texts: List of texts to batch
+
+        Returns:
+            List of (batch_texts, start_index) tuples
+        """
+        batches = []
+        current_batch = []
+        current_batch_chars = 0
+        current_batch_start_idx = 0
+
+        for i, text in enumerate(texts):
+            text_len = len(text) if text else 0
+
+            # Check if adding this text would exceed limits
+            would_exceed_chars = current_batch_chars + text_len > self.max_batch_chars
+            would_exceed_count = len(current_batch) >= self.batch_size
+
+            # If current batch would be exceeded, start a new batch
+            if current_batch and (would_exceed_chars or would_exceed_count):
+                batches.append((current_batch, current_batch_start_idx))
+                current_batch = []
+                current_batch_chars = 0
+                current_batch_start_idx = i
+
+            # Add text to current batch
+            current_batch.append(text)
+            current_batch_chars += text_len
+
+            # Handle single texts that exceed max_batch_chars
+            if text_len > self.max_batch_chars and len(current_batch) == 1:
+                # Process oversized text in its own batch
+                batches.append((current_batch, current_batch_start_idx))
+                current_batch = []
+                current_batch_chars = 0
+                current_batch_start_idx = i + 1
+
+        # Add remaining texts
+        if current_batch:
+            batches.append((current_batch, current_batch_start_idx))
+
+        return batches
 
     def _process_batch(
         self,
@@ -416,6 +476,7 @@ class MLXServerEmbeddingService:
             "average_rate_per_second": avg_rate,
             "server_url": self.server_url,
             "batch_size": self.batch_size,
+            "max_batch_chars": self.max_batch_chars,
             "model_size": self.model_size,
             "embedding_dimension": self.EMBEDDING_DIMENSION,
         }

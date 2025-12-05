@@ -321,11 +321,21 @@ class SearchDiagnostics:
             performance_stats = []
             total_time = 0
 
-            # Create a dummy vector for testing (768 dimensions for nomic-embed-text)
-            dummy_vector = [0.1] * 768
-
             for collection_name in target_collections[:3]:  # Test up to 3 collections
                 try:
+                    # Get vector dimension from collection config
+                    collection_info = self.qdrant_client.get_collection(collection_name)
+                    vector_size = 768  # Default fallback
+                    if hasattr(collection_info.config, "params") and hasattr(collection_info.config.params, "vectors"):
+                        vectors_config = collection_info.config.params.vectors
+                        if hasattr(vectors_config, "size"):
+                            vector_size = vectors_config.size
+                        elif isinstance(vectors_config, dict) and "" in vectors_config:
+                            vector_size = vectors_config[""].size
+
+                    # Create dummy vector with correct dimension for this collection
+                    dummy_vector = [0.1] * vector_size
+
                     start_time = time.time()
 
                     # Perform a simple vector search
@@ -341,6 +351,7 @@ class SearchDiagnostics:
                             "collection": collection_name,
                             "search_time_ms": search_time * 1000,
                             "results_returned": len(results),
+                            "vector_dimension": vector_size,
                             "status": "success",
                         }
                     )

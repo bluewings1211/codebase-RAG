@@ -7,6 +7,7 @@ to support multiple languages with their unique characteristics.
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 
 from models.code_chunk import ChunkType, CodeChunk
@@ -224,13 +225,15 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
     For large files, it intelligently splits by lines with context overlap.
     """
 
-    # Configuration for smart splitting
-    # ~4 chars per token, 6000 tokens = 24000 chars threshold
-    MAX_CHUNK_CHARS = 24000
-    # Lines per chunk when splitting (approximately 200-300 lines)
-    TARGET_LINES_PER_CHUNK = 250
+    # Configuration for smart splitting (can be overridden via environment variables)
+    # nomic-embed-text has 2048 token context limit
+    # ~4 chars per token, so 2048 tokens ≈ 8192 chars
+    # Default: 6000 chars (~1500 tokens) for safety margin
+    DEFAULT_MAX_CHUNK_CHARS = 6000
+    # Lines per chunk when splitting (approximately 60-80 lines for code)
+    DEFAULT_TARGET_LINES_PER_CHUNK = 75
     # Overlap lines for context continuity
-    OVERLAP_LINES = 15
+    DEFAULT_OVERLAP_LINES = 15
 
     def __init__(self, language: str, reason: str = "language_not_supported"):
         """Initialize the fallback strategy.
@@ -241,6 +244,10 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         """
         super().__init__(language)
         self.reason = reason
+        # Load configuration from environment or use defaults
+        self.max_chunk_chars = int(os.getenv("FALLBACK_MAX_CHUNK_CHARS", str(self.DEFAULT_MAX_CHUNK_CHARS)))
+        self.target_lines_per_chunk = int(os.getenv("FALLBACK_TARGET_LINES", str(self.DEFAULT_TARGET_LINES_PER_CHUNK)))
+        self.overlap_lines = int(os.getenv("FALLBACK_OVERLAP_LINES", str(self.DEFAULT_OVERLAP_LINES)))
 
     def get_node_mappings(self) -> dict[ChunkType, list[str]]:
         """Return empty mappings for fallback strategy."""
@@ -269,7 +276,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         char_count = len(content)
 
         # Check if smart splitting is needed
-        needs_splitting = char_count > self.MAX_CHUNK_CHARS
+        needs_splitting = char_count > self.max_chunk_chars
 
         # Record fallback usage for tracking
         fallback_tracker.record_fallback(
@@ -322,7 +329,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
 
         self.logger.info(
             f"Smart splitting {file_path}: {len(content):,} chars, {total_lines} lines "
-            f"into ~{(total_lines // self.TARGET_LINES_PER_CHUNK) + 1} chunks"
+            f"into ~{(total_lines // self.target_lines_per_chunk) + 1} chunks"
         )
 
         chunk_index = 0
@@ -331,7 +338,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         while current_line < total_lines:
             # Calculate chunk boundaries
             start_line = current_line
-            end_line = min(current_line + self.TARGET_LINES_PER_CHUNK, total_lines)
+            end_line = min(current_line + self.target_lines_per_chunk, total_lines)
 
             # Try to find a better split point (empty line, comment, etc.)
             end_line = self._find_split_point(lines, end_line, total_lines)
@@ -377,7 +384,7 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
 
             # Move to next chunk with overlap
             if end_line < total_lines:
-                current_line = max(end_line - self.OVERLAP_LINES, current_line + 1)
+                current_line = max(end_line - self.overlap_lines, current_line + 1)
             else:
                 break
 
