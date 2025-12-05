@@ -219,13 +219,28 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
     """
     Fallback chunking strategy for unsupported languages.
 
-    This strategy provides basic whole-file chunking when no specific
-    language strategy is available.
+    This strategy provides smart chunking when no specific language strategy
+    is available. For small files, it creates a single whole-file chunk.
+    For large files, it intelligently splits by lines with context overlap.
     """
 
-    def __init__(self, language: str):
-        """Initialize the fallback strategy."""
+    # Configuration for smart splitting
+    # ~4 chars per token, 6000 tokens = 24000 chars threshold
+    MAX_CHUNK_CHARS = 24000
+    # Lines per chunk when splitting (approximately 200-300 lines)
+    TARGET_LINES_PER_CHUNK = 250
+    # Overlap lines for context continuity
+    OVERLAP_LINES = 15
+
+    def __init__(self, language: str, reason: str = "language_not_supported"):
+        """Initialize the fallback strategy.
+
+        Args:
+            language: The language identifier
+            reason: Reason for using fallback (language_not_supported, parser_unavailable, parse_error)
+        """
         super().__init__(language)
+        self.reason = reason
 
     def get_node_mappings(self) -> dict[ChunkType, list[str]]:
         """Return empty mappings for fallback strategy."""
@@ -233,22 +248,45 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
 
     def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
         """
-        Extract a single chunk containing the entire file.
+        Extract chunks from file content with smart splitting for large files.
+
+        For small files (under threshold), creates a single whole-file chunk.
+        For large files, splits into multiple chunks with context overlap.
 
         Args:
-            root_node: Root node of the parsed AST
+            root_node: Root node of the parsed AST (not used in fallback)
             file_path: Path to the source file
             content: Original file content
 
         Returns:
-            List containing a single whole-file chunk
+            List of code chunks
         """
         import hashlib
 
-        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
-        content_lines = content.split("\n")
+        from utils.fallback_tracker import fallback_tracker
 
-        # Generate chunk_id using file path and content hash
+        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+        char_count = len(content)
+
+        # Check if smart splitting is needed
+        needs_splitting = char_count > self.MAX_CHUNK_CHARS
+
+        # Record fallback usage for tracking
+        fallback_tracker.record_fallback(
+            file_path=file_path,
+            content=content,
+            reason=self.reason,
+            was_truncated=needs_splitting,
+        )
+
+        if needs_splitting:
+            return self._extract_split_chunks(file_path, content, content_hash)
+        else:
+            return self._extract_single_chunk(file_path, content, content_hash)
+
+    def _extract_single_chunk(self, file_path: str, content: str, content_hash: str) -> list[CodeChunk]:
+        """Extract a single whole-file chunk for small files."""
+        content_lines = content.split("\n")
         chunk_id = f"{file_path}:{content_hash[:8]}"
 
         chunk = CodeChunk(
@@ -268,6 +306,133 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         )
 
         return [chunk]
+
+    def _extract_split_chunks(self, file_path: str, content: str, content_hash: str) -> list[CodeChunk]:
+        """
+        Split large files into multiple chunks with context overlap.
+
+        Uses line-based splitting to preserve some semantic structure,
+        with overlap to maintain context between chunks.
+        """
+        import hashlib
+
+        lines = content.split("\n")
+        total_lines = len(lines)
+        chunks = []
+
+        self.logger.info(
+            f"Smart splitting {file_path}: {len(content):,} chars, {total_lines} lines "
+            f"into ~{(total_lines // self.TARGET_LINES_PER_CHUNK) + 1} chunks"
+        )
+
+        chunk_index = 0
+        current_line = 0
+
+        while current_line < total_lines:
+            # Calculate chunk boundaries
+            start_line = current_line
+            end_line = min(current_line + self.TARGET_LINES_PER_CHUNK, total_lines)
+
+            # Try to find a better split point (empty line, comment, etc.)
+            end_line = self._find_split_point(lines, end_line, total_lines)
+
+            # Extract chunk content
+            chunk_lines = lines[start_line:end_line]
+            chunk_content = "\n".join(chunk_lines)
+
+            # Calculate byte positions
+            start_byte = sum(len(line.encode("utf-8")) + 1 for line in lines[:start_line])
+            end_byte = start_byte + len(chunk_content.encode("utf-8"))
+
+            # Generate unique chunk ID
+            chunk_content_hash = hashlib.md5(chunk_content.encode("utf-8")).hexdigest()
+            chunk_id = f"{file_path}:part{chunk_index}:{chunk_content_hash[:8]}"
+
+            chunk = CodeChunk(
+                chunk_id=chunk_id,
+                file_path=file_path,
+                content=chunk_content,
+                chunk_type=ChunkType.WHOLE_FILE,  # Still marked as WHOLE_FILE for compatibility
+                language=self.language,
+                start_line=start_line + 1,  # 1-indexed
+                end_line=end_line,
+                start_byte=start_byte,
+                end_byte=end_byte,
+                name=f"file_{self.language}_part{chunk_index + 1}",
+                signature=f"Part {chunk_index + 1} of {file_path}",
+                docstring=None,
+                content_hash=chunk_content_hash,
+            )
+
+            # Add metadata about splitting
+            chunk.metadata = {
+                "is_split_chunk": True,
+                "chunk_part": chunk_index + 1,
+                "total_file_lines": total_lines,
+                "split_reason": "exceeded_token_threshold",
+            }
+
+            chunks.append(chunk)
+            chunk_index += 1
+
+            # Move to next chunk with overlap
+            if end_line < total_lines:
+                current_line = max(end_line - self.OVERLAP_LINES, current_line + 1)
+            else:
+                break
+
+        self.logger.info(f"Split {file_path} into {len(chunks)} chunks")
+        return chunks
+
+    def _find_split_point(self, lines: list[str], target_end: int, total_lines: int) -> int:
+        """
+        Find a better split point near the target end line.
+
+        Looks for natural breakpoints like:
+        - Empty lines
+        - Lines starting with comments
+        - Lines with closing braces/brackets
+
+        Args:
+            lines: All lines in the file
+            target_end: Target end line
+            total_lines: Total number of lines
+
+        Returns:
+            Adjusted end line for the split
+        """
+        if target_end >= total_lines:
+            return total_lines
+
+        # Search window: look up to 20 lines before target for a better split point
+        search_start = max(target_end - 20, 0)
+
+        best_split = target_end
+
+        for i in range(target_end, search_start, -1):
+            if i >= len(lines):
+                continue
+
+            line = lines[i].strip()
+
+            # Empty line is a great split point
+            if not line:
+                best_split = i + 1
+                break
+
+            # Line with only closing brace/bracket
+            if line in ["}", "]", ")", "};", "];", ");", "end", "fi", "done", "esac"]:
+                best_split = i + 1
+                break
+
+            # Comment line (potential section separator)
+            if line.startswith("#") or line.startswith("//") or line.startswith("/*") or line.startswith("*"):
+                # Check if previous line is empty (section break)
+                if i > 0 and not lines[i - 1].strip():
+                    best_split = i
+                    break
+
+        return best_split
 
     def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
         """Always include chunks in fallback strategy."""

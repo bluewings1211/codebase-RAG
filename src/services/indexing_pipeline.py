@@ -20,6 +20,7 @@ from services.file_metadata_service import FileMetadataService
 from services.indexing_service import IndexingService
 from services.project_analysis_service import ProjectAnalysisService
 from services.qdrant_service import QdrantService
+from utils.fallback_tracker import fallback_tracker
 from utils.performance_monitor import MemoryMonitor
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ class PipelineResult:
     embedding_failures: int = 0
     embedding_success_rate: float = 100.0
     failed_chunks: list[dict[str, Any]] | None = None
+    # Fallback chunking tracking
+    fallback_report: dict[str, Any] | None = None
 
 
 class IndexingPipeline:
@@ -135,6 +138,11 @@ class IndexingPipeline:
             self._report_progress("Storing file metadata for change detection")
             self._store_file_metadata(directory, project_name)
 
+            # Log and collect fallback report
+            self._report_progress("Generating fallback chunking report")
+            self._log_fallback_report()
+            fallback_report_data = fallback_tracker.get_summary()
+
             # Calculate final metrics
             processing_time = time.time() - start_time
 
@@ -151,6 +159,7 @@ class IndexingPipeline:
                 embedding_failures=embedding_failures,
                 embedding_success_rate=embedding_success_rate,
                 failed_chunks=failed_chunks,
+                fallback_report=fallback_report_data if fallback_report_data.get("total_fallback_files", 0) > 0 else None,
             )
 
         except Exception as e:
@@ -304,6 +313,10 @@ class IndexingPipeline:
                 except Exception as e:
                     self.logger.error(f"Error during metadata cleanup: {e}")
 
+            # Log and collect fallback report
+            self._log_fallback_report()
+            fallback_report_data = fallback_tracker.get_summary()
+
             processing_time = time.time() - start_time
 
             return PipelineResult(
@@ -320,6 +333,7 @@ class IndexingPipeline:
                 embedding_failures=embedding_failures,
                 embedding_success_rate=embedding_success_rate,
                 failed_chunks=failed_chunks,
+                fallback_report=fallback_report_data if fallback_report_data.get("total_fallback_files", 0) > 0 else None,
             )
 
         except Exception as e:
@@ -491,14 +505,28 @@ class IndexingPipeline:
             self._report_error("metadata", directory, f"Error storing file metadata: {str(e)}")
 
     def _ensure_collection_exists(self, collection_name: str):
-        """Ensure collection exists before storing data."""
+        """Ensure collection exists before storing data.
+
+        The vector size is determined dynamically based on the configured
+        embedding provider:
+        - MLX Server (Qwen3-Embedding): 1024 dimensions
+        - Ollama (nomic-embed-text): 768 dimensions
+        """
         try:
             if not self.qdrant_service.collection_exists(collection_name):
                 from qdrant_client.http.models import Distance, VectorParams
 
+                # Get vector dimension from embedding service
+                vector_size = self.embedding_service.get_embedding_dimension()
+
+                self.logger.info(
+                    f"Creating collection {collection_name} with vector size {vector_size} "
+                    f"(provider: {self.embedding_service.provider})"
+                )
+
                 self.qdrant_service.client.create_collection(
                     collection_name=collection_name,
-                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
                 )
 
         except Exception as e:
@@ -525,3 +553,21 @@ class IndexingPipeline:
             self._error_callback(error_type, location, message, suggestion=suggestion)
         else:
             self.logger.error(f"{error_type.upper()} in {location}: {message}")
+
+    def _log_fallback_report(self) -> None:
+        """Log fallback chunking report if any fallbacks were used."""
+        if fallback_tracker.has_fallbacks():
+            fallback_tracker.log_report()
+
+            # Also log recommended languages for Tree-sitter support
+            recommendations = fallback_tracker.get_recommended_languages()
+            if recommendations:
+                self.logger.info("-" * 40)
+                self.logger.info("RECOMMENDED TREE-SITTER LANGUAGES TO ADD:")
+                for rec in recommendations[:5]:  # Top 5 recommendations
+                    truncated_note = f" (TRUNCATED: {rec['truncated_count']})" if rec["truncated_count"] > 0 else ""
+                    self.logger.info(
+                        f"  {rec['language']} ({rec['extension']}): "
+                        f"{rec['file_count']} files, priority score: {rec['priority_score']:,.0f}{truncated_note}"
+                    )
+                self.logger.info("-" * 40)

@@ -6,10 +6,13 @@ import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ollama
 import torch
+
+if TYPE_CHECKING:
+    from services.mlx_embedding_service import MLXServerEmbeddingService
 
 
 @dataclass
@@ -113,10 +116,40 @@ class CumulativeMetrics:
 
 
 class EmbeddingService:
+    """
+    Embedding service with provider selection support.
+
+    Supports two embedding providers:
+    - ollama: Default provider using Ollama API (sequential, ~35 emb/s)
+    - mlx_server: High-performance MLX server for Apple Silicon (~1700 emb/s)
+
+    Set EMBEDDING_PROVIDER environment variable to select provider.
+    MLX server provides 48-161x faster embedding generation on Apple Silicon.
+    """
+
+    # Provider constants
+    PROVIDER_OLLAMA = "ollama"
+    PROVIDER_MLX_SERVER = "mlx_server"
+
+    # Default embedding dimensions by provider
+    OLLAMA_DEFAULT_DIMENSION = 768  # nomic-embed-text
+    MLX_DEFAULT_DIMENSION = 1024  # Qwen3-Embedding
+
     def __init__(self):
         # Initialize logger first since other methods depend on it
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self._setup_logging()
+
+        # Provider selection
+        self.provider = os.getenv("EMBEDDING_PROVIDER", self.PROVIDER_OLLAMA).lower()
+        self._mlx_service: MLXServerEmbeddingService | None = None
+        self._fallback_enabled = os.getenv("MLX_FALLBACK_TO_OLLAMA", "true").lower() == "true"
+
+        # Initialize provider-specific settings
+        if self.provider == self.PROVIDER_MLX_SERVER:
+            self._init_mlx_provider()
+        else:
+            self.provider = self.PROVIDER_OLLAMA  # Normalize to ollama
 
         # Now initialize other components that may use the logger
         self.device = self._get_device()
@@ -141,6 +174,42 @@ class EmbeddingService:
 
         # Current batch metadata for error tracking
         self._current_batch_metadata: list[dict] | None = None
+
+        self.logger.info(f"Embedding service initialized with provider: {self.provider}")
+
+    def _init_mlx_provider(self) -> None:
+        """Initialize MLX server provider."""
+        try:
+            from services.mlx_embedding_service import MLXServerEmbeddingService
+
+            self._mlx_service = MLXServerEmbeddingService()
+
+            # Verify MLX server is accessible
+            health = self._mlx_service.health_check()
+            if health.get("healthy"):
+                self.logger.info(f"MLX server provider initialized successfully - " f"URL: {self._mlx_service.server_url}")
+            else:
+                error_msg = health.get("error", "Unknown error")
+                self.logger.warning(
+                    f"MLX server not available: {error_msg}. " f"Will {'fallback to Ollama' if self._fallback_enabled else 'fail'}."
+                )
+                if self._fallback_enabled:
+                    self.provider = self.PROVIDER_OLLAMA
+                    self._mlx_service = None
+
+        except ImportError as e:
+            self.logger.warning(f"MLX service import failed: {e}")
+            if self._fallback_enabled:
+                self.provider = self.PROVIDER_OLLAMA
+            else:
+                raise
+        except Exception as e:
+            self.logger.warning(f"MLX provider initialization failed: {e}")
+            if self._fallback_enabled:
+                self.provider = self.PROVIDER_OLLAMA
+                self._mlx_service = None
+            else:
+                raise
 
     def _get_device(self):
         if platform.system() == "Darwin":
@@ -226,8 +295,11 @@ class EmbeddingService:
     ) -> torch.Tensor | list[torch.Tensor] | None:
         """Generate embeddings for single text or batch of texts.
 
+        Automatically routes to the configured provider (Ollama or MLX Server).
+        MLX Server provides 48-161x faster embedding generation on Apple Silicon.
+
         Args:
-            model: The embedding model to use
+            model: The embedding model to use (ignored for MLX server, uses configured model)
             text: Single text string or list of text strings
             chunk_metadata: Optional list of metadata dicts for each text (for error tracking).
                            Each dict should contain: file_path, name, chunk_type, start_line, end_line
@@ -235,13 +307,64 @@ class EmbeddingService:
         Returns:
             Single tensor for single text, list of tensors for batch, or None on error
         """
-        # Handle both single text and batch processing
+        # Route to MLX server if configured
+        if self.provider == self.PROVIDER_MLX_SERVER and self._mlx_service:
+            return self._generate_mlx_embeddings(text, chunk_metadata)
+
+        # Handle both single text and batch processing with Ollama
         if isinstance(text, str):
             return self._generate_single_embedding(model, text)
         elif isinstance(text, list):
             return self._generate_batch_embeddings(model, text, chunk_metadata)
         else:
             self.logger.error(f"Invalid input type for text: {type(text)}")
+            return None
+
+    def _generate_mlx_embeddings(
+        self,
+        text: str | list[str],
+        chunk_metadata: list[dict] | None = None,
+    ) -> torch.Tensor | list[torch.Tensor] | None:
+        """Generate embeddings using MLX server with automatic fallback.
+
+        Args:
+            text: Single text string or list of text strings
+            chunk_metadata: Optional metadata for error tracking
+
+        Returns:
+            Embeddings or None on error
+        """
+        if not self._mlx_service:
+            self.logger.error("MLX service not initialized")
+            return None
+
+        try:
+            if isinstance(text, str):
+                return self._mlx_service.generate_single_embedding(text)
+            elif isinstance(text, list):
+                result = self._mlx_service.generate_embeddings_batch(text, chunk_metadata)
+                # Update our metrics with MLX results
+                mlx_metrics = self._mlx_service.get_metrics()
+                if self._metrics_enabled:
+                    self.cumulative_metrics.total_successful += mlx_metrics.get("total_embeddings", 0)
+                return result
+            else:
+                self.logger.error(f"Invalid input type for text: {type(text)}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"MLX embedding generation failed: {e}")
+
+            # Fallback to Ollama if enabled
+            if self._fallback_enabled:
+                self.logger.warning("Falling back to Ollama provider")
+                model = os.getenv("OLLAMA_DEFAULT_EMBEDDING_MODEL", "nomic-embed-text")
+
+                if isinstance(text, str):
+                    return self._generate_single_embedding(model, text)
+                elif isinstance(text, list):
+                    return self._generate_batch_embeddings(model, text, chunk_metadata)
+
             return None
 
     def _generate_single_embedding(self, model: str, text: str) -> torch.Tensor | None:
@@ -823,3 +946,71 @@ class EmbeddingService:
         """Deprecated: Use generate_embeddings instead."""
         self.logger.warning("generate_embedding is deprecated, use generate_embeddings instead")
         return self._generate_single_embedding(model, text)
+
+    def get_embedding_dimension(self) -> int:
+        """Get the embedding dimension for the current provider.
+
+        Returns:
+            int: Embedding dimension (1024 for MLX/Qwen3, 768 for Ollama/nomic-embed-text)
+        """
+        if self.provider == self.PROVIDER_MLX_SERVER and self._mlx_service:
+            return self._mlx_service.get_embedding_dimension()
+        return self.OLLAMA_DEFAULT_DIMENSION
+
+    def get_provider_info(self) -> dict[str, Any]:
+        """Get information about the current embedding provider.
+
+        Returns:
+            Dictionary with provider details
+        """
+        info = {
+            "provider": self.provider,
+            "fallback_enabled": self._fallback_enabled,
+        }
+
+        if self.provider == self.PROVIDER_MLX_SERVER and self._mlx_service:
+            info.update(
+                {
+                    "server_url": self._mlx_service.server_url,
+                    "batch_size": self._mlx_service.batch_size,
+                    "model_size": self._mlx_service.model_size,
+                    "embedding_dimension": self._mlx_service.get_embedding_dimension(),
+                }
+            )
+        else:
+            info.update(
+                {
+                    "host": self.ollama_host,
+                    "batch_size": self.embedding_batch_size,
+                    "embedding_dimension": self.OLLAMA_DEFAULT_DIMENSION,
+                }
+            )
+
+        return info
+
+    def check_provider_health(self) -> dict[str, Any]:
+        """Check the health of the current embedding provider.
+
+        Returns:
+            Dictionary with health status and details
+        """
+        if self.provider == self.PROVIDER_MLX_SERVER and self._mlx_service:
+            return self._mlx_service.health_check()
+
+        # Check Ollama health
+        try:
+            client = ollama.Client(host=self.ollama_host)
+            # Try listing models to verify connection
+            client.list()
+            return {
+                "healthy": True,
+                "provider": "ollama",
+                "host": self.ollama_host,
+            }
+        except Exception as e:
+            return {
+                "healthy": False,
+                "provider": "ollama",
+                "host": self.ollama_host,
+                "error": str(e),
+            }
