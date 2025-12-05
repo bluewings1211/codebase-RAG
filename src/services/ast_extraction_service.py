@@ -433,11 +433,54 @@ class AstExtractionService:
 
     def _extract_go_name(self, node: Node) -> str | None:
         """Extract name from Go AST nodes."""
-        if node.type in ["function_declaration", "method_declaration"]:
-            # Find the identifier child
+        if node.type == "function_declaration":
+            # Find the identifier child (function name)
             for child in node.children:
                 if child.type == "identifier":
                     return child.text.decode("utf-8")
+
+        elif node.type == "method_declaration":
+            # In method declarations, name is field_identifier (after receiver)
+            for child in node.children:
+                if child.type == "field_identifier":
+                    return child.text.decode("utf-8")
+
+        elif node.type == "type_declaration":
+            # Find type_spec which contains the type name
+            for child in node.children:
+                if child.type == "type_spec":
+                    for subchild in child.children:
+                        if subchild.type == "type_identifier":
+                            return subchild.text.decode("utf-8")
+
+        elif node.type in ["const_declaration", "var_declaration"]:
+            # Find const_spec or var_spec which contains the identifier
+            for child in node.children:
+                if child.type in ["const_spec", "var_spec"]:
+                    for subchild in child.children:
+                        if subchild.type == "identifier":
+                            return subchild.text.decode("utf-8")
+
+        elif node.type == "short_var_declaration":
+            # Left side has identifier list
+            for child in node.children:
+                if child.type == "expression_list":
+                    for subchild in child.children:
+                        if subchild.type == "identifier":
+                            return subchild.text.decode("utf-8")
+
+        elif node.type == "import_declaration":
+            # For imports, extract package path or alias
+            for child in node.children:
+                if child.type == "import_spec":
+                    for subchild in child.children:
+                        if subchild.type == "interpreted_string_literal":
+                            # Return the import path without quotes
+                            path = subchild.text.decode("utf-8").strip('"')
+                            return path.split("/")[-1]  # Return package name
+                elif child.type == "import_spec_list":
+                    # Multiple imports - return "imports"
+                    return "imports"
 
         return None
 

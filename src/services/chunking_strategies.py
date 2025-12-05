@@ -975,6 +975,36 @@ class JavaScriptChunkingStrategy(BaseChunkingStrategy):
         return features
 
 
+@register_chunking_strategy("tsx")
+class TsxChunkingStrategy(JavaScriptChunkingStrategy):
+    """
+    Chunking strategy for TypeScript JSX (TSX) code.
+
+    Extends JavaScript strategy with TypeScript-specific features like
+    interfaces, type aliases, and React component patterns.
+    """
+
+    def get_node_mappings(self) -> dict[ChunkType, list[str]]:
+        """Get TSX-specific AST node type mappings."""
+        base_mappings = super().get_node_mappings()
+
+        # Add TypeScript-specific mappings
+        tsx_mappings = {
+            ChunkType.INTERFACE: ["interface_declaration"],
+            ChunkType.TYPE_ALIAS: ["type_alias_declaration"],
+            ChunkType.ENUM: ["enum_declaration"],
+        }
+
+        base_mappings.update(tsx_mappings)
+        return base_mappings
+
+    def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
+        """TSX-specific chunk inclusion logic."""
+        if chunk_type in [ChunkType.INTERFACE, ChunkType.TYPE_ALIAS, ChunkType.ENUM]:
+            return True
+        return super().should_include_chunk(node, chunk_type)
+
+
 @register_chunking_strategy("typescript")
 class TypeScriptChunkingStrategy(JavaScriptChunkingStrategy):
     """
@@ -1078,3 +1108,389 @@ class TypeScriptChunkingStrategy(JavaScriptChunkingStrategy):
                                 generics.append(subchild.text.decode("utf-8"))
 
         return generics
+
+
+@register_chunking_strategy("go")
+class GoChunkingStrategy(BaseChunkingStrategy):
+    """
+    Chunking strategy specifically designed for Go code.
+
+    This strategy handles Go-specific constructs like functions, methods,
+    structs, interfaces, constants, and package-level declarations.
+    """
+
+    def get_node_mappings(self) -> dict[ChunkType, list[str]]:
+        """Get Go-specific AST node type mappings."""
+        return {
+            ChunkType.FUNCTION: ["function_declaration", "method_declaration"],
+            ChunkType.STRUCT: ["type_declaration"],  # Handles struct and interface types
+            ChunkType.CONSTANT: ["const_declaration"],
+            ChunkType.VARIABLE: ["var_declaration", "short_var_declaration"],
+            ChunkType.IMPORT: ["import_declaration"],
+        }
+
+    def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
+        """Extract Go-specific chunks from the AST."""
+        node_mappings = self.get_node_mappings()
+        chunks = self.ast_extractor.extract_chunks(root_node, file_path, content, self.language, node_mappings)
+
+        # Go-specific post-processing
+        processed_chunks = []
+        for chunk in chunks:
+            if self._is_valid_go_chunk(chunk):
+                # Add Go-specific metadata
+                additional_metadata = self.extract_additional_metadata(root_node, chunk)
+                if additional_metadata:
+                    chunk.metadata = getattr(chunk, "metadata", {})
+                    chunk.metadata.update(additional_metadata)
+
+                processed_chunks.append(chunk)
+
+        return self.post_process_chunks(processed_chunks)
+
+    def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
+        """Determine if a Go node should be included as a chunk."""
+        if chunk_type == ChunkType.FUNCTION:
+            # Include all function and method declarations
+            return True
+
+        elif chunk_type == ChunkType.STRUCT:
+            # Include type declarations (structs, interfaces)
+            return self._is_go_type_declaration(node)
+
+        elif chunk_type == ChunkType.CONSTANT:
+            # Include const declarations
+            return True
+
+        elif chunk_type == ChunkType.VARIABLE:
+            # Include package-level variable declarations
+            return self._is_package_level_var(node)
+
+        elif chunk_type == ChunkType.IMPORT:
+            # Include import declarations
+            return True
+
+        return True
+
+    def extract_additional_metadata(self, node: Node, chunk: CodeChunk) -> dict[str, any]:
+        """Extract Go-specific metadata."""
+        metadata = {}
+
+        # Check for receiver (method vs function)
+        if chunk.chunk_type == ChunkType.FUNCTION:
+            receiver = self._extract_receiver(node)
+            if receiver:
+                metadata["receiver"] = receiver
+                metadata["is_method"] = True
+            else:
+                metadata["is_method"] = False
+
+        # Check for struct features
+        if chunk.chunk_type == ChunkType.STRUCT:
+            struct_features = self._extract_struct_features(node)
+            metadata.update(struct_features)
+
+        # Extract exported status (capitalized = exported in Go)
+        if chunk.name:
+            metadata["is_exported"] = chunk.name[0].isupper()
+
+        return metadata
+
+    def _is_valid_go_chunk(self, chunk: CodeChunk) -> bool:
+        """Validate Go-specific chunk requirements."""
+        if not self.validate_chunk(chunk):
+            return False
+
+        # Go-specific validations
+        if chunk.chunk_type == ChunkType.FUNCTION:
+            # Function should have a name and body
+            return chunk.name and "{" in chunk.content
+
+        elif chunk.chunk_type == ChunkType.STRUCT:
+            # Type declaration should have a name
+            return chunk.name and chunk.name != "unnamed_struct"
+
+        elif chunk.chunk_type == ChunkType.CONSTANT:
+            # Constant should have assignment
+            return "=" in chunk.content or "iota" in chunk.content
+
+        return True
+
+    def _is_go_type_declaration(self, node: Node) -> bool:
+        """Check if a node is a Go type declaration (struct or interface)."""
+        if node.type != "type_declaration":
+            return False
+
+        # Check for struct_type or interface_type in children
+        node_text = node.text.decode("utf-8") if node.text else ""
+        return "struct" in node_text or "interface" in node_text
+
+    def _is_package_level_var(self, node: Node) -> bool:
+        """Check if a var declaration is at package level."""
+        # In Go, package-level vars are typically outside function bodies
+        # Simple heuristic: check parent is not a block
+        if node.parent and node.parent.type == "block":
+            return False
+        return True
+
+    def _extract_receiver(self, node: Node) -> str | None:
+        """Extract method receiver from Go method declaration."""
+        if node.type == "method_declaration":
+            # Find parameter_list (receiver)
+            for child in node.children:
+                if child.type == "parameter_list":
+                    receiver_text = child.text.decode("utf-8") if child.text else ""
+                    if receiver_text:
+                        return receiver_text
+                    break
+        return None
+
+    def _extract_struct_features(self, node: Node) -> dict[str, any]:
+        """Extract Go struct/interface features."""
+        features = {}
+
+        if node.type == "type_declaration":
+            node_text = node.text.decode("utf-8") if node.text else ""
+
+            if "struct" in node_text:
+                features["type_kind"] = "struct"
+                # Count fields (simplified)
+                features["field_count"] = node_text.count("\n") - 1
+
+            elif "interface" in node_text:
+                features["type_kind"] = "interface"
+                # Count methods in interface (simplified)
+                features["method_count"] = node_text.count("(")
+
+        return features
+
+
+class PlainTextChunkingStrategy(BaseChunkingStrategy):
+    """
+    Chunking strategy for plain text files (.txt).
+
+    This strategy handles plain text files by splitting them into meaningful
+    chunks based on paragraphs (empty line separators) or fixed-size sections.
+    """
+
+    # Configuration
+    MIN_PARAGRAPH_LENGTH = 50  # Minimum characters for a standalone paragraph
+    MAX_CHUNK_SIZE = 2000  # Maximum characters per chunk
+    PARAGRAPH_SEPARATOR = "\n\n"  # Double newline indicates paragraph break
+
+    def __init__(self, language: str = "plaintext"):
+        """Initialize the plain text strategy."""
+        super().__init__(language)
+
+    def get_node_mappings(self) -> dict[ChunkType, list[str]]:
+        """Return empty mappings as plain text doesn't use AST."""
+        return {}
+
+    def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
+        """
+        Extract chunks from plain text files based on paragraphs.
+
+        Args:
+            root_node: Root node (not used for plain text)
+            file_path: Path to the source file
+            content: Original file content
+
+        Returns:
+            List of extracted chunks based on paragraph structure
+        """
+        import hashlib
+
+        chunks = []
+
+        # Split by paragraphs (double newlines)
+        paragraphs = self._split_into_paragraphs(content)
+
+        if not paragraphs:
+            # Empty file, return single chunk
+            return [self._create_single_chunk(file_path, content)]
+
+        # Track line numbers
+        current_line = 1
+
+        for i, paragraph in enumerate(paragraphs):
+            if not paragraph.strip():
+                continue
+
+            # Find the start line of this paragraph
+            start_line = self._find_paragraph_start_line(content, paragraph, current_line)
+            paragraph_lines = paragraph.count("\n") + 1
+            end_line = start_line + paragraph_lines - 1
+
+            # Calculate byte positions
+            start_byte = content.find(paragraph)
+            end_byte = start_byte + len(paragraph.encode("utf-8"))
+
+            # Generate content hash
+            content_hash = hashlib.md5(paragraph.encode("utf-8")).hexdigest()
+
+            # Create chunk
+            chunk_id = f"{file_path}:para{i}:{content_hash[:8]}"
+
+            chunk = CodeChunk(
+                chunk_id=chunk_id,
+                file_path=file_path,
+                content=paragraph,
+                chunk_type=ChunkType.SECTION,
+                language=self.language,
+                start_line=start_line,
+                end_line=end_line,
+                start_byte=start_byte if start_byte >= 0 else 0,
+                end_byte=end_byte,
+                name=self._extract_paragraph_title(paragraph, i),
+                signature=None,
+                docstring=None,
+                content_hash=content_hash,
+            )
+
+            chunks.append(chunk)
+            current_line = end_line + 1
+
+        # If no meaningful chunks were created, create a single whole-file chunk
+        if not chunks:
+            return [self._create_single_chunk(file_path, content)]
+
+        return self.post_process_chunks(chunks)
+
+    def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
+        """Include all chunks for plain text."""
+        return True
+
+    def _split_into_paragraphs(self, content: str) -> list[str]:
+        """
+        Split content into paragraphs based on empty lines.
+
+        Merges small paragraphs and splits large ones to maintain reasonable chunk sizes.
+        """
+        # Split by double newlines (paragraph breaks)
+        raw_paragraphs = content.split(self.PARAGRAPH_SEPARATOR)
+
+        # Process paragraphs: merge small ones, split large ones
+        processed = []
+        current_chunk = []
+        current_size = 0
+
+        for para in raw_paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+
+            para_size = len(para)
+
+            # If adding this paragraph would exceed max size, save current and start new
+            if current_size + para_size > self.MAX_CHUNK_SIZE and current_chunk:
+                processed.append("\n\n".join(current_chunk))
+                current_chunk = []
+                current_size = 0
+
+            # If single paragraph is too large, split it
+            if para_size > self.MAX_CHUNK_SIZE:
+                if current_chunk:
+                    processed.append("\n\n".join(current_chunk))
+                    current_chunk = []
+                    current_size = 0
+
+                # Split large paragraph by sentences or fixed size
+                split_parts = self._split_large_paragraph(para)
+                processed.extend(split_parts)
+            else:
+                current_chunk.append(para)
+                current_size += para_size + 2  # +2 for separator
+
+        # Add remaining chunk
+        if current_chunk:
+            processed.append("\n\n".join(current_chunk))
+
+        return processed
+
+    def _split_large_paragraph(self, paragraph: str) -> list[str]:
+        """Split a large paragraph into smaller chunks."""
+        chunks = []
+
+        # Try to split by sentences first
+        sentences = self._split_into_sentences(paragraph)
+
+        current_chunk = []
+        current_size = 0
+
+        for sentence in sentences:
+            sentence_size = len(sentence)
+
+            if current_size + sentence_size > self.MAX_CHUNK_SIZE and current_chunk:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+                current_size = 0
+
+            current_chunk.append(sentence)
+            current_size += sentence_size + 1
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+
+    def _split_into_sentences(self, text: str) -> list[str]:
+        """Split text into sentences (simple heuristic)."""
+        import re
+
+        # Simple sentence splitting by common terminators
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        return [s.strip() for s in sentences if s.strip()]
+
+    def _find_paragraph_start_line(self, content: str, paragraph: str, min_line: int) -> int:
+        """Find the starting line number of a paragraph in the content."""
+        lines = content.split("\n")
+        paragraph_first_line = paragraph.split("\n")[0].strip()
+
+        for i in range(min_line - 1, len(lines)):
+            if lines[i].strip() == paragraph_first_line:
+                return i + 1  # 1-indexed
+
+        return min_line
+
+    def _extract_paragraph_title(self, paragraph: str, index: int) -> str:
+        """Extract a title or summary for the paragraph."""
+        # Use first line as title if it's short enough
+        first_line = paragraph.split("\n")[0].strip()
+
+        if len(first_line) <= 60:
+            return first_line[:50] + "..." if len(first_line) > 50 else first_line
+
+        # Use first few words
+        words = first_line.split()[:5]
+        return " ".join(words) + "..."
+
+    def _create_single_chunk(self, file_path: str, content: str) -> CodeChunk:
+        """Create a single chunk for the entire file."""
+        import hashlib
+
+        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+        content_lines = content.split("\n")
+
+        chunk_id = f"{file_path}:{content_hash[:8]}"
+
+        return CodeChunk(
+            chunk_id=chunk_id,
+            file_path=file_path,
+            content=content,
+            chunk_type=ChunkType.WHOLE_FILE,
+            language=self.language,
+            start_line=1,
+            end_line=len(content_lines),
+            start_byte=0,
+            end_byte=len(content.encode("utf-8")),
+            name="plaintext_file",
+            signature=None,
+            docstring=None,
+            content_hash=content_hash,
+        )
+
+
+# Register plain text strategy
+plaintext_strategy = PlainTextChunkingStrategy("plaintext")
+chunking_strategy_registry.register_strategy("plaintext", plaintext_strategy)
+chunking_strategy_registry.register_strategy("txt", plaintext_strategy)

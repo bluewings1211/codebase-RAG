@@ -215,6 +215,15 @@ class LanguageSupportService:
                 "comment_prefixes": ["//", "/*"],
                 "string_delimiters": ['"', "'"],
             },
+            "plaintext": {
+                "supports_async": False,
+                "supports_classes": False,
+                "supports_interfaces": False,
+                "supports_generics": False,
+                "docstring_support": False,
+                "comment_prefixes": [],
+                "string_delimiters": [],
+            },
         }
 
     def get_supported_languages(self) -> list[str]:
@@ -254,6 +263,8 @@ class LanguageSupportService:
                 return "yaml"
             elif extension in [".md", ".markdown"]:
                 return "markdown"
+            elif extension == ".txt":
+                return "plaintext"
 
         return detected
 
@@ -313,7 +324,7 @@ class LanguageSupportService:
         extensions = self._tree_sitter_manager.get_all_extensions()
 
         # Add structured file extensions
-        extensions.update([".json", ".jsonl", ".yaml", ".yml", ".md", ".markdown"])
+        extensions.update([".json", ".jsonl", ".yaml", ".yml", ".md", ".markdown", ".txt"])
 
         return extensions
 
@@ -379,7 +390,7 @@ class LanguageSupportService:
                 "configured_languages": len(self._node_mappings),
                 "languages_with_node_mappings": list(self._node_mappings.keys()),
                 "languages_with_configs": list(self._language_configs.keys()),
-                "structured_file_support": ["json", "yaml", "markdown"],
+                "structured_file_support": ["json", "yaml", "markdown", "plaintext"],
             }
         )
 
