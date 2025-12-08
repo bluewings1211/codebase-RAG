@@ -5,13 +5,13 @@ This service orchestrates the complete indexing process, including file discover
 change detection, processing, embedding generation, and storage operations.
 """
 
+import hashlib
 import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from uuid import uuid4
 
 from qdrant_client.http.models import PointStruct
 from services.change_detector_service import ChangeDetectorService
@@ -103,10 +103,10 @@ class IndexingPipeline:
             # Initialize monitoring
             self.memory_monitor.start_monitoring()
 
-            # Clear existing metadata if requested
+            # Clear existing data if requested (all collections: code, config, documentation, metadata)
             if clear_existing:
-                self._report_progress("Clearing existing metadata")
-                self.metadata_service.clear_project_metadata(project_name)
+                self._report_progress("Clearing all existing project collections")
+                self._clear_project_collections(project_name)
 
             # Process codebase
             self._report_progress("Processing codebase for intelligent chunking")
@@ -420,7 +420,12 @@ class IndexingPipeline:
                 points = []
                 for idx, (chunk, embedding) in enumerate(zip(collection_chunk_list, embeddings, strict=False)):
                     if embedding is not None:
-                        point_id = str(uuid4())
+                        # Generate deterministic point_id using md5(file_path + chunk_index)
+                        # This ensures the same chunk always gets the same ID, enabling proper upsert behavior
+                        file_path = chunk.metadata.get("file_path", "")
+                        chunk_index = chunk.metadata.get("chunk_index", idx)
+                        point_id = hashlib.md5(f"{file_path}_{chunk_index}".encode()).hexdigest()
+
                         metadata = chunk.metadata.copy()
                         metadata["collection"] = collection_name
                         # CRITICAL FIX: Include chunk content in payload
@@ -532,6 +537,44 @@ class IndexingPipeline:
         except Exception as e:
             self.logger.error(f"Failed to ensure collection {collection_name} exists: {e}")
             raise
+
+    def _clear_project_collections(self, project_name: str) -> None:
+        """
+        Clear all collections for a project (code, config, documentation, and metadata).
+
+        This ensures a clean slate when clear_existing=True, preventing duplicate
+        entries from accumulating across multiple indexing runs.
+
+        Args:
+            project_name: Name of the project to clear collections for
+        """
+        collection_types = ["code", "config", "documentation", "file_metadata"]
+        collection_prefix = f"project_{project_name}"
+
+        try:
+            # Get existing collections
+            collections = self.qdrant_service.client.get_collections()
+            existing_names = [col.name for col in collections.collections]
+
+            cleared = []
+            for collection_type in collection_types:
+                collection_name = f"{collection_prefix}_{collection_type}"
+                if collection_name in existing_names:
+                    try:
+                        self.qdrant_service.client.delete_collection(collection_name)
+                        cleared.append(collection_name)
+                        self.logger.info(f"Cleared collection: {collection_name}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to clear collection {collection_name}: {e}")
+
+            if cleared:
+                self.logger.info(f"Cleared {len(cleared)} collections for project '{project_name}'")
+            else:
+                self.logger.info(f"No existing collections found for project '{project_name}'")
+
+        except Exception as e:
+            self.logger.error(f"Error clearing project collections: {e}")
+            # Don't raise - allow indexing to continue even if clearing fails
 
     def _get_performance_metrics(self) -> dict[str, Any]:
         """Get current performance metrics."""
