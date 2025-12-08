@@ -16,6 +16,17 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class ChunkMetadataInfo:
+    """Extracted chunk metadata for error tracking and reporting."""
+
+    file_path: str = ""
+    chunk_name: str = ""
+    chunk_type: str = ""
+    start_line: int = 0
+    end_line: int = 0
+
+
+@dataclass
 class FailedEmbeddingInfo:
     """Information about a failed embedding for debugging."""
 
@@ -722,26 +733,45 @@ class EmbeddingService:
             self.logger.error(f"Core batch processing failed after all retries: {e}")
             return None
 
-    def _log_slow_api_response(self, original_index: int, duration: float, text: str) -> None:
-        """Log detailed slow API response with chunk metadata if available."""
-        # Try to get metadata for this index
-        chunk_info = ""
-        file_path = "unknown"
-        chunk_name = "unknown"
-        chunk_type = "unknown"
-        start_line = 0
-        end_line = 0
+    def _get_chunk_metadata_for_index(
+        self, original_index: int, default_file_path: str = "", default_name: str = "", default_type: str = ""
+    ) -> ChunkMetadataInfo:
+        """
+        Extract chunk metadata for a given index from the current batch metadata.
 
+        Args:
+            original_index: Index of the chunk in the batch
+            default_file_path: Default value for file_path if not found
+            default_name: Default value for chunk_name if not found
+            default_type: Default value for chunk_type if not found
+
+        Returns:
+            ChunkMetadataInfo with extracted or default values
+        """
         if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
             meta = self._current_batch_metadata[original_index]
-            file_path = meta.get("file_path", "unknown")
-            chunk_name = meta.get("name", "unknown")
-            chunk_type = meta.get("chunk_type", "unknown")
-            # Support both naming conventions: line_start/line_end and start_line/end_line
-            start_line = meta.get("line_start") or meta.get("start_line", 0)
-            end_line = meta.get("line_end") or meta.get("end_line", 0)
+            return ChunkMetadataInfo(
+                file_path=meta.get("file_path", default_file_path),
+                chunk_name=meta.get("name", default_name),
+                chunk_type=meta.get("chunk_type", default_type),
+                # Support both naming conventions: line_start/line_end and start_line/end_line
+                start_line=meta.get("line_start") or meta.get("start_line", 0),
+                end_line=meta.get("line_end") or meta.get("end_line", 0),
+            )
 
-            chunk_info = f" - {file_path} [{chunk_type}:{chunk_name}] (lines {start_line}-{end_line})"
+        return ChunkMetadataInfo(
+            file_path=default_file_path,
+            chunk_name=default_name,
+            chunk_type=default_type,
+        )
+
+    def _log_slow_api_response(self, original_index: int, duration: float, text: str) -> None:
+        """Log detailed slow API response with chunk metadata if available."""
+        meta = self._get_chunk_metadata_for_index(original_index, "unknown", "unknown", "unknown")
+
+        chunk_info = ""
+        if meta.file_path != "unknown":
+            chunk_info = f" - {meta.file_path} [{meta.chunk_type}:{meta.chunk_name}] (lines {meta.start_line}-{meta.end_line})"
 
         text_length = len(text) if text else 0
         self.logger.warning(f"⏱️  Slow API response for index {original_index}: {duration:.2f}s ({text_length} chars){chunk_info}")
@@ -754,30 +784,16 @@ class EmbeddingService:
         if not self._metrics_enabled:
             return
 
-        # Get metadata if available
-        file_path = ""
-        chunk_name = ""
-        chunk_type = ""
-        start_line = 0
-        end_line = 0
-
-        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
-            meta = self._current_batch_metadata[original_index]
-            file_path = meta.get("file_path", "")
-            chunk_name = meta.get("name", "")
-            chunk_type = meta.get("chunk_type", "")
-            # Support both naming conventions: line_start/line_end and start_line/end_line
-            start_line = meta.get("line_start") or meta.get("start_line", 0)
-            end_line = meta.get("line_end") or meta.get("end_line", 0)
+        meta = self._get_chunk_metadata_for_index(original_index)
 
         slow_info = SlowApiResponseInfo(
             index=original_index,
             duration_seconds=duration,
-            file_path=file_path,
-            chunk_name=chunk_name,
-            chunk_type=chunk_type,
-            start_line=start_line,
-            end_line=end_line,
+            file_path=meta.file_path,
+            chunk_name=meta.chunk_name,
+            chunk_type=meta.chunk_type,
+            start_line=meta.start_line,
+            end_line=meta.end_line,
             text_length=len(text) if text else 0,
         )
 
@@ -790,19 +806,14 @@ class EmbeddingService:
 
     def _log_embedding_error(self, original_index: int, error_message: str, text: str) -> None:
         """Log detailed embedding error with chunk metadata if available."""
-        # Try to get metadata for this index
-        chunk_info = ""
-        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
-            meta = self._current_batch_metadata[original_index]
-            file_path = meta.get("file_path", "unknown")
-            chunk_name = meta.get("name", "unknown")
-            chunk_type = meta.get("chunk_type", "unknown")
-            # Support both naming conventions: line_start/line_end and start_line/end_line
-            start_line = meta.get("line_start") or meta.get("start_line", "?")
-            end_line = meta.get("line_end") or meta.get("end_line", "?")
+        meta = self._get_chunk_metadata_for_index(original_index, "unknown", "unknown", "unknown")
 
+        chunk_info = ""
+        if meta.file_path != "unknown":
             chunk_info = (
-                f"\n    📁 File: {file_path}" f"\n    🔖 Chunk: {chunk_type}:{chunk_name}" f"\n    📍 Lines: {start_line}-{end_line}"
+                f"\n    📁 File: {meta.file_path}"
+                f"\n    🔖 Chunk: {meta.chunk_type}:{meta.chunk_name}"
+                f"\n    📍 Lines: {meta.start_line}-{meta.end_line}"
             )
 
         text_preview = text[:150].replace("\n", " ") if text else "(empty)"
@@ -818,30 +829,16 @@ class EmbeddingService:
         if not self._metrics_enabled:
             return
 
-        # Get metadata if available
-        file_path = ""
-        chunk_name = ""
-        chunk_type = ""
-        start_line = 0
-        end_line = 0
-
-        if self._current_batch_metadata and original_index < len(self._current_batch_metadata):
-            meta = self._current_batch_metadata[original_index]
-            file_path = meta.get("file_path", "")
-            chunk_name = meta.get("name", "")
-            chunk_type = meta.get("chunk_type", "")
-            # Support both naming conventions: line_start/line_end and start_line/end_line
-            start_line = meta.get("line_start") or meta.get("start_line", 0)
-            end_line = meta.get("line_end") or meta.get("end_line", 0)
+        meta = self._get_chunk_metadata_for_index(original_index)
 
         failed_info = FailedEmbeddingInfo(
             index=original_index,
             error_message=error_message,
-            file_path=file_path,
-            chunk_name=chunk_name,
-            chunk_type=chunk_type,
-            start_line=start_line,
-            end_line=end_line,
+            file_path=meta.file_path,
+            chunk_name=meta.chunk_name,
+            chunk_type=meta.chunk_type,
+            start_line=meta.start_line,
+            end_line=meta.end_line,
             text_preview=text[:100] if text else "",
         )
 

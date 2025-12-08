@@ -420,11 +420,37 @@ class IndexingPipeline:
                 points = []
                 for idx, (chunk, embedding) in enumerate(zip(collection_chunk_list, embeddings, strict=False)):
                     if embedding is not None:
-                        # Generate deterministic point_id using md5(file_path + chunk_index)
+                        # Generate deterministic point_id using md5(file_path + stable_identifier)
                         # This ensures the same chunk always gets the same ID, enabling proper upsert behavior
                         file_path = chunk.metadata.get("file_path", "")
-                        chunk_index = chunk.metadata.get("chunk_index", idx)
-                        point_id = hashlib.md5(f"{file_path}_{chunk_index}".encode()).hexdigest()
+
+                        # Use multiple identifiers for stability (in order of preference):
+                        # 1. chunk_index (if explicitly set)
+                        # 2. chunk_id (if available)
+                        # 3. start_line + end_line (for code chunks)
+                        # 4. name + chunk_type (for named elements)
+                        # 5. fallback to idx (least stable, but ensures uniqueness)
+                        chunk_index = chunk.metadata.get("chunk_index")
+                        if chunk_index is not None:
+                            stable_id = str(chunk_index)
+                        elif chunk.metadata.get("chunk_id"):
+                            stable_id = chunk.metadata.get("chunk_id")
+                        elif chunk.metadata.get("start_line") is not None:
+                            start_line = chunk.metadata.get("start_line", 0)
+                            end_line = chunk.metadata.get("end_line", start_line)
+                            stable_id = f"L{start_line}-{end_line}"
+                        elif chunk.metadata.get("name"):
+                            name = chunk.metadata.get("name", "")
+                            chunk_type = chunk.metadata.get("chunk_type", "unknown")
+                            stable_id = f"{chunk_type}:{name}"
+                        else:
+                            # Fallback to idx - log warning as this may cause issues
+                            stable_id = str(idx)
+                            self.logger.debug(
+                                f"Using fallback idx for point_id: {file_path} (no chunk_index, chunk_id, line numbers, or name)"
+                            )
+
+                        point_id = hashlib.md5(f"{file_path}_{stable_id}".encode()).hexdigest()
 
                         metadata = chunk.metadata.copy()
                         metadata["collection"] = collection_name
