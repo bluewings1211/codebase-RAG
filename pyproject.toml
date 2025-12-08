@@ -58,7 +58,7 @@ exclude = '''
   | buck-out
   | build
   | dist
-  | tests/fixtures/sample_code/sample_syntax_errors\.py
+  | src/tests/fixtures/sample_code/sample_syntax_errors\.py
 )/
 '''
 
@@ -88,8 +88,8 @@ unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/fixtures/sample_code/sample_syntax_errors.py" = ["ALL"]  # Ignore all in test fixtures
-"tests/**/*.py" = ["T201", "BLE001", "N806"]  # Allow print, bare except, and variable naming in tests
+"src/tests/fixtures/sample_code/sample_syntax_errors.py" = ["ALL"]  # Ignore all in test fixtures
+"src/tests/**/*.py" = ["T201", "BLE001", "N806"]  # Allow print, bare except, and variable naming in tests
 "demo_*.py" = ["T201", "BLE001"]  # Allow print and bare except in demos
 "test_*.py" = ["T201", "BLE001", "N806"]  # Allow print, bare except, and variable naming in test files
 "manual_indexing.py" = ["T201", "BLE001"]  # Allow print and bare except in manual tool
