@@ -6,8 +6,10 @@ languages' specific chunking logic, providing a flexible and extensible way
 to support multiple languages with their unique characteristics.
 """
 
+import hashlib
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 
 from models.code_chunk import ChunkType, CodeChunk
@@ -268,8 +270,6 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of code chunks
         """
-        import hashlib
-
         from utils.fallback_tracker import fallback_tracker
 
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
@@ -321,8 +321,6 @@ class FallbackChunkingStrategy(BaseChunkingStrategy):
         Uses line-based splitting to preserve some semantic structure,
         with overlap to maintain context between chunks.
         """
-        import hashlib
-
         lines = content.split("\n")
         total_lines = len(lines)
         chunks = []
@@ -593,8 +591,6 @@ class StructuredFileChunkingStrategy(BaseChunkingStrategy):
         end_line: int,
     ) -> CodeChunk:
         """Create a structured file chunk."""
-        import hashlib
-
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
 
         # Generate chunk_id using file path and content hash
@@ -618,8 +614,6 @@ class StructuredFileChunkingStrategy(BaseChunkingStrategy):
 
     def _extract_single_chunk(self, file_path: str, content: str) -> CodeChunk:
         """Create a single chunk for the entire file."""
-        import hashlib
-
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
         content_lines = content.split("\n")
 
@@ -871,8 +865,6 @@ class PythonChunkingStrategy(BaseChunkingStrategy):
         Returns:
             CodeChunk with class skeleton or None if extraction failed
         """
-        import hashlib
-
         try:
             # Get class name
             class_name = None
@@ -1197,6 +1189,9 @@ class JavaScriptChunkingStrategy(BaseChunkingStrategy):
 
     This strategy handles JavaScript-specific constructs like functions, classes,
     arrow functions, async functions, and ES6+ features.
+
+    Uses custom AST traversal to maintain node-to-chunk mapping for accurate
+    metadata extraction (e.g., arrow function detection, class features).
     """
 
     def get_node_mappings(self) -> dict[ChunkType, list[str]]:
@@ -1216,23 +1211,178 @@ class JavaScriptChunkingStrategy(BaseChunkingStrategy):
         }
 
     def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
-        """Extract JavaScript-specific chunks from the AST."""
-        node_mappings = self.get_node_mappings()
-        chunks = self.ast_extractor.extract_chunks(root_node, file_path, content, self.language, node_mappings)
+        """
+        Extract JavaScript-specific chunks from the AST.
+
+        Uses custom AST traversal to maintain node references for accurate
+        metadata extraction (arrow functions, methods, class features, etc.).
+        """
+        chunks = []
+        content_lines = content.split("\n")
+
+        # Use custom traversal that maintains node-to-chunk mapping
+        self._traverse_js_ast(
+            root_node,
+            chunks,
+            file_path,
+            content,
+            content_lines,
+        )
 
         # JavaScript-specific post-processing
         processed_chunks = []
         for chunk in chunks:
             if self._is_valid_javascript_chunk(chunk):
-                # Add JavaScript-specific metadata
-                additional_metadata = self.extract_additional_metadata(root_node, chunk)
-                if additional_metadata:
-                    chunk.metadata = getattr(chunk, "metadata", {})
-                    chunk.metadata.update(additional_metadata)
-
                 processed_chunks.append(chunk)
 
         return self.post_process_chunks(processed_chunks)
+
+    def _traverse_js_ast(
+        self,
+        node: Node,
+        chunks: list[CodeChunk],
+        file_path: str,
+        content: str,
+        content_lines: list[str],
+    ) -> None:
+        """
+        Custom AST traversal for JavaScript with proper node-to-chunk mapping.
+
+        Args:
+            node: Current AST node
+            chunks: List to collect extracted chunks
+            file_path: Path to the source file
+            content: Original file content
+            content_lines: Content split into lines
+        """
+        node_type = node.type
+
+        if node_type == "function_declaration":
+            chunk = self._extract_function_chunk(node, file_path, content, content_lines, is_arrow=False)
+            if chunk:
+                chunks.append(chunk)
+            return  # Don't traverse into function body
+
+        elif node_type == "arrow_function":
+            # Only extract top-level arrow functions assigned to variables
+            # Arrow functions inside other expressions are skipped
+            if self._is_top_level_arrow_function(node):
+                chunk = self._extract_function_chunk(node, file_path, content, content_lines, is_arrow=True)
+                if chunk:
+                    chunks.append(chunk)
+            return
+
+        elif node_type == "method_definition":
+            chunk = self._extract_method_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        elif node_type == "class_declaration":
+            chunk = self._extract_class_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            # Continue traversing to extract methods inside class
+            for child in node.children:
+                if child.type == "class_body":
+                    for body_child in child.children:
+                        self._traverse_js_ast(body_child, chunks, file_path, content, content_lines)
+            return
+
+        elif node_type == "lexical_declaration":
+            if self._is_javascript_constant(node):
+                chunk = self._extract_const_chunk(node, file_path, content, content_lines)
+                if chunk:
+                    chunks.append(chunk)
+            return
+
+        elif node_type == "variable_declaration":
+            chunk = self._extract_variable_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        elif node_type == "import_statement":
+            chunk = self._extract_import_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        elif node_type == "export_statement":
+            chunk = self._extract_export_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        # Recursively process children
+        for child in node.children:
+            self._traverse_js_ast(child, chunks, file_path, content, content_lines)
+
+    def _extract_function_chunk(
+        self, node: Node, file_path: str, content: str, content_lines: list[str], is_arrow: bool = False
+    ) -> CodeChunk | None:
+        """Extract a function declaration as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.FUNCTION, file_path, content, content_lines, self.language)
+        if chunk:
+            chunk.metadata = chunk.metadata or {}
+            chunk.metadata["is_arrow_function"] = is_arrow
+            chunk.metadata["is_async"] = self.ast_extractor.is_async_function(node)
+            chunk.metadata["is_method"] = False
+            # Extract ES6 features from this specific node
+            es6_features = self._extract_es6_features(node)
+            if es6_features:
+                chunk.metadata["es6_features"] = es6_features
+        return chunk
+
+    def _extract_method_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a method definition as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.FUNCTION, file_path, content, content_lines, self.language)
+        if chunk:
+            chunk.metadata = chunk.metadata or {}
+            chunk.metadata["is_arrow_function"] = False
+            chunk.metadata["is_async"] = self.ast_extractor.is_async_function(node)
+            chunk.metadata["is_method"] = True
+            es6_features = self._extract_es6_features(node)
+            if es6_features:
+                chunk.metadata["es6_features"] = es6_features
+        return chunk
+
+    def _extract_class_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a class declaration as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.CLASS, file_path, content, content_lines, self.language)
+        if chunk:
+            chunk.metadata = chunk.metadata or {}
+            # Extract class features from the actual class node
+            class_features = self._extract_class_features(node)
+            chunk.metadata.update(class_features)
+            es6_features = self._extract_es6_features(node)
+            if es6_features:
+                chunk.metadata["es6_features"] = es6_features
+        return chunk
+
+    def _extract_const_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a const declaration as a chunk."""
+        return self.ast_extractor.create_chunk_from_node(node, ChunkType.CONSTANT, file_path, content, content_lines, self.language)
+
+    def _extract_variable_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a variable declaration as a chunk."""
+        return self.ast_extractor.create_chunk_from_node(node, ChunkType.VARIABLE, file_path, content, content_lines, self.language)
+
+    def _extract_import_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract an import statement as a chunk."""
+        return self.ast_extractor.create_chunk_from_node(node, ChunkType.IMPORT, file_path, content, content_lines, self.language)
+
+    def _extract_export_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract an export statement as a chunk."""
+        return self.ast_extractor.create_chunk_from_node(node, ChunkType.EXPORT, file_path, content, content_lines, self.language)
+
+    def _is_top_level_arrow_function(self, node: Node) -> bool:
+        """Check if an arrow function is at top-level (assigned to a variable)."""
+        # Arrow function should be part of a variable declarator or assignment
+        parent = node.parent
+        if parent and parent.type in ["variable_declarator", "assignment_expression"]:
+            return True
+        return False
 
     def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
         """Determine if a JavaScript node should be included as a chunk."""
@@ -1253,28 +1403,6 @@ class JavaScriptChunkingStrategy(BaseChunkingStrategy):
             return True
 
         return True
-
-    def extract_additional_metadata(self, node: Node, chunk: CodeChunk) -> dict[str, any]:
-        """Extract JavaScript-specific metadata."""
-        metadata = {}
-
-        # Check for arrow functions
-        if chunk.chunk_type == ChunkType.FUNCTION:
-            metadata["is_arrow_function"] = node.type == "arrow_function"
-            metadata["is_async"] = self.ast_extractor.is_async_function(node)
-            metadata["is_method"] = node.type == "method_definition"
-
-        # Check for class features
-        if chunk.chunk_type == ChunkType.CLASS:
-            class_features = self._extract_class_features(node)
-            metadata.update(class_features)
-
-        # Check for ES6+ features
-        es6_features = self._extract_es6_features(node)
-        if es6_features:
-            metadata["es6_features"] = es6_features
-
-        return metadata
 
     def _is_valid_javascript_chunk(self, chunk: CodeChunk) -> bool:
         """Validate JavaScript-specific chunk requirements."""
@@ -1493,6 +1621,9 @@ class GoChunkingStrategy(BaseChunkingStrategy):
 
     This strategy handles Go-specific constructs like functions, methods,
     structs, interfaces, constants, and package-level declarations.
+
+    Uses custom AST traversal to maintain node-to-chunk mapping for accurate
+    metadata extraction (e.g., method receivers, struct features).
     """
 
     def get_node_mappings(self) -> dict[ChunkType, list[str]]:
@@ -1506,23 +1637,159 @@ class GoChunkingStrategy(BaseChunkingStrategy):
         }
 
     def extract_chunks(self, root_node: Node, file_path: str, content: str) -> list[CodeChunk]:
-        """Extract Go-specific chunks from the AST."""
-        node_mappings = self.get_node_mappings()
-        chunks = self.ast_extractor.extract_chunks(root_node, file_path, content, self.language, node_mappings)
+        """
+        Extract Go-specific chunks from the AST.
+
+        Uses custom AST traversal to maintain node references for accurate
+        metadata extraction (method receivers, struct features, etc.).
+        """
+        chunks = []
+        content_lines = content.split("\n")
+
+        # Use custom traversal that maintains node-to-chunk mapping
+        self._traverse_go_ast(
+            root_node,
+            chunks,
+            file_path,
+            content,
+            content_lines,
+        )
 
         # Go-specific post-processing
         processed_chunks = []
         for chunk in chunks:
             if self._is_valid_go_chunk(chunk):
-                # Add Go-specific metadata
-                additional_metadata = self.extract_additional_metadata(root_node, chunk)
-                if additional_metadata:
-                    chunk.metadata = getattr(chunk, "metadata", {})
-                    chunk.metadata.update(additional_metadata)
-
                 processed_chunks.append(chunk)
 
         return self.post_process_chunks(processed_chunks)
+
+    def _traverse_go_ast(
+        self,
+        node: Node,
+        chunks: list[CodeChunk],
+        file_path: str,
+        content: str,
+        content_lines: list[str],
+    ) -> None:
+        """
+        Custom AST traversal for Go with proper node-to-chunk mapping.
+
+        Args:
+            node: Current AST node
+            chunks: List to collect extracted chunks
+            file_path: Path to the source file
+            content: Original file content
+            content_lines: Content split into lines
+        """
+        # Check if this node should be extracted as a chunk
+        node_type = node.type
+
+        if node_type == "function_declaration":
+            chunk = self._extract_function_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return  # Don't traverse into function body
+
+        elif node_type == "method_declaration":
+            chunk = self._extract_method_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return  # Don't traverse into method body
+
+        elif node_type == "type_declaration":
+            if self._is_go_type_declaration(node):
+                chunk = self._extract_type_chunk(node, file_path, content, content_lines)
+                if chunk:
+                    chunks.append(chunk)
+            return
+
+        elif node_type == "const_declaration":
+            chunk = self._extract_const_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        elif node_type in ["var_declaration", "short_var_declaration"]:
+            if self._is_package_level_var(node):
+                chunk = self._extract_var_chunk(node, file_path, content, content_lines)
+                if chunk:
+                    chunks.append(chunk)
+            return
+
+        elif node_type == "import_declaration":
+            chunk = self._extract_import_chunk(node, file_path, content, content_lines)
+            if chunk:
+                chunks.append(chunk)
+            return
+
+        # Recursively process children
+        for child in node.children:
+            self._traverse_go_ast(child, chunks, file_path, content, content_lines)
+
+    def _extract_function_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a function declaration as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.FUNCTION, file_path, content, content_lines, self.language)
+        if chunk:
+            # Add Go-specific metadata with correct node reference
+            chunk.metadata = chunk.metadata or {}
+            chunk.metadata["is_method"] = False
+            if chunk.name:
+                chunk.metadata["is_exported"] = chunk.name[0].isupper()
+        return chunk
+
+    def _extract_method_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a method declaration as a chunk with receiver info."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.FUNCTION, file_path, content, content_lines, self.language)
+        if chunk:
+            # Add Go-specific metadata with correct node reference
+            chunk.metadata = chunk.metadata or {}
+            chunk.metadata["is_method"] = True
+
+            # Extract receiver from the actual method node
+            receiver = self._extract_receiver(node)
+            if receiver:
+                chunk.metadata["receiver"] = receiver
+
+            if chunk.name:
+                chunk.metadata["is_exported"] = chunk.name[0].isupper()
+        return chunk
+
+    def _extract_type_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a type declaration (struct/interface) as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.STRUCT, file_path, content, content_lines, self.language)
+        if chunk:
+            # Add Go-specific metadata with correct node reference
+            chunk.metadata = chunk.metadata or {}
+
+            # Extract struct/interface features from the actual node
+            struct_features = self._extract_struct_features(node)
+            chunk.metadata.update(struct_features)
+
+            if chunk.name:
+                chunk.metadata["is_exported"] = chunk.name[0].isupper()
+        return chunk
+
+    def _extract_const_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a const declaration as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.CONSTANT, file_path, content, content_lines, self.language)
+        if chunk:
+            chunk.metadata = chunk.metadata or {}
+            if chunk.name:
+                chunk.metadata["is_exported"] = chunk.name[0].isupper()
+        return chunk
+
+    def _extract_var_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract a var declaration as a chunk."""
+        chunk = self.ast_extractor.create_chunk_from_node(node, ChunkType.VARIABLE, file_path, content, content_lines, self.language)
+        if chunk:
+            chunk.metadata = chunk.metadata or {}
+            if chunk.name:
+                chunk.metadata["is_exported"] = chunk.name[0].isupper()
+        return chunk
+
+    def _extract_import_chunk(self, node: Node, file_path: str, content: str, content_lines: list[str]) -> CodeChunk | None:
+        """Extract an import declaration as a chunk."""
+        return self.ast_extractor.create_chunk_from_node(node, ChunkType.IMPORT, file_path, content, content_lines, self.language)
 
     def should_include_chunk(self, node: Node, chunk_type: ChunkType) -> bool:
         """Determine if a Go node should be included as a chunk."""
@@ -1547,30 +1814,6 @@ class GoChunkingStrategy(BaseChunkingStrategy):
             return True
 
         return True
-
-    def extract_additional_metadata(self, node: Node, chunk: CodeChunk) -> dict[str, any]:
-        """Extract Go-specific metadata."""
-        metadata = {}
-
-        # Check for receiver (method vs function)
-        if chunk.chunk_type == ChunkType.FUNCTION:
-            receiver = self._extract_receiver(node)
-            if receiver:
-                metadata["receiver"] = receiver
-                metadata["is_method"] = True
-            else:
-                metadata["is_method"] = False
-
-        # Check for struct features
-        if chunk.chunk_type == ChunkType.STRUCT:
-            struct_features = self._extract_struct_features(node)
-            metadata.update(struct_features)
-
-        # Extract exported status (capitalized = exported in Go)
-        if chunk.name:
-            metadata["is_exported"] = chunk.name[0].isupper()
-
-        return metadata
 
     def _is_valid_go_chunk(self, chunk: CodeChunk) -> bool:
         """Validate Go-specific chunk requirements."""
@@ -1674,8 +1917,6 @@ class PlainTextChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of extracted chunks based on paragraph structure
         """
-        import hashlib
-
         chunks = []
 
         # Split by paragraphs (double newlines)
@@ -1811,8 +2052,6 @@ class PlainTextChunkingStrategy(BaseChunkingStrategy):
 
     def _split_into_sentences(self, text: str) -> list[str]:
         """Split text into sentences (simple heuristic)."""
-        import re
-
         # Simple sentence splitting by common terminators
         sentences = re.split(r"(?<=[.!?])\s+", text)
         return [s.strip() for s in sentences if s.strip()]
@@ -1842,8 +2081,6 @@ class PlainTextChunkingStrategy(BaseChunkingStrategy):
 
     def _create_single_chunk(self, file_path: str, content: str) -> CodeChunk:
         """Create a single chunk for the entire file."""
-        import hashlib
-
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
         content_lines = content.split("\n")
 
