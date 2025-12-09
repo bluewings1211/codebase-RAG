@@ -4,10 +4,18 @@
 
 set -e
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# Check if stdout is a TTY for color support
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    RED='\033[0;31m'
+    NC='\033[0m' # No Color
+else
+    GREEN=''
+    YELLOW=''
+    RED=''
+    NC=''
+fi
 
 printf "${GREEN}Starting setup for Codebase RAG MCP Server...${NC}\n"
 
@@ -40,7 +48,7 @@ if command -v docker &> /dev/null; then
     else
          printf "${YELLOW}Qdrant container is NOT running.${NC}\n"
          printf "Recommended command to start Qdrant:\n"
-         printf "docker run -d -p 6333:6333 -p 6334:6334 -v \$(pwd)/qdrant_data:/qdrant/storage qdrant/qdrant\n"
+         printf "docker run -d -p 6333:6333 -p 6334:6334 -v \"\$(pwd)/qdrant_data:/qdrant/storage\" qdrant/qdrant\n"
     fi
 else
     printf "${YELLOW}Warning: Docker is not installed. You will need to run Qdrant manually.${NC}\n"
