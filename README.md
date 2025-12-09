@@ -2,10 +2,11 @@
 
 A Retrieval-Augmented Generation (RAG) Model-Controller-Provider (MCP) server designed to assist AI agents and developers in understanding and navigating codebases.
 
-## 🚀 Quick Links
+## Quick Links
 
 *   **[Getting Started](GETTING_STARTED.md)**: Installation and Basic Usage.
 *   **[User Manual](MANUAL.md)**: Tutorials, Features, and Advanced Usage.
+*   **[Configuration](docs/CONFIGURATION.md)**: Environment variables and performance tuning.
 *   **[Architecture](ARCHITECTURE.md)**: System design and high-level overview.
 *   **[Contributing](CONTRIBUTING.md)**: Developer setup and guidelines.
 

@@ -103,7 +103,7 @@ For a complete detailed reference of all available tools and their arguments, pl
 A: Ensure you have indexed the directory. Run `uv run python manual_indexing.py -d . -m incremental` to check.
 
 **Q: Indexing is slow.**
-A: If you are on a Mac with Apple Silicon, ensure you are using the MLX provider (see `README.md` for configuration) or adjust the `INDEXING_BATCH_SIZE` in `.env`.
+A: If you are on a Mac with Apple Silicon, ensure you are using the MLX provider (see [Configuration Guide](docs/CONFIGURATION.md#high-speed-indexing-with-mlx-server)) or adjust the `INDEXING_BATCH_SIZE` in `.env`.
 
 **Q: "Port already in use" error.**
 A: Check if Qdrant is already running in Docker.
