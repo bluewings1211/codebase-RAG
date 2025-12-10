@@ -96,6 +96,8 @@ def register_tools(mcp_app: FastMCP) -> None:
         target_projects: list[str] = None,
         collection_types: list[str] = None,
         minimal_output: bool = None,
+        enable_reranking: bool = None,
+        rerank_top_k: int = 50,
     ):
         """Search indexed content using natural language queries.
 
@@ -119,6 +121,13 @@ def register_tools(mcp_app: FastMCP) -> None:
                           - True: Essential fields only (file_path, content, line numbers, breadcrumb)
                           - False: Full results with all metadata and scores
                           - None: Uses MCP_MINIMAL_OUTPUT env var
+            enable_reranking: Enable cross-encoder reranking for improved accuracy (default: env RERANKER_ENABLED)
+                            - True: Use two-stage retrieval (vector search + reranking)
+                            - False: Use single-stage vector search only
+                            - None: Uses RERANKER_ENABLED env var (default: true)
+            rerank_top_k: Number of candidates for Stage 1 before reranking (default: 50)
+                         Higher values may improve quality but increase latency.
+                         Only used when enable_reranking is True.
 
         Returns:
             Dictionary containing search results with metadata, scores, and context
@@ -133,6 +142,8 @@ def register_tools(mcp_app: FastMCP) -> None:
             target_projects,
             collection_types,
             minimal_output,
+            enable_reranking,
+            rerank_top_k,
         )
 
     @mcp_app.tool()

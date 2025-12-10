@@ -28,6 +28,9 @@ from tools.core.errors import (
 from tools.core.retry_utils import retry_operation
 from utils.output_control import filter_search_results
 
+# Reranker imports (lazy loaded)
+_reranker_instance = None
+
 # Load environment variables
 env_path = Path(__file__).parent.parent.parent.parent / ".env"
 if env_path.exists():
@@ -42,6 +45,21 @@ PROJECT_MARKERS = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.m
 _qdrant_client = None
 _embeddings_manager = None
 _current_project = None
+_reranker_service = None
+
+
+def get_reranker_service():
+    """Get or create reranker service instance."""
+    global _reranker_service
+    if _reranker_service is None:
+        try:
+            from services.reranker_service import get_reranker_instance
+
+            _reranker_service = get_reranker_instance()
+        except ImportError as e:
+            logger.warning(f"Reranker service not available: {e}")
+            _reranker_service = None
+    return _reranker_service
 
 
 def get_qdrant_client():
@@ -546,12 +564,15 @@ async def search(
     target_projects: list[str] | None = None,
     collection_types: list[str] | None = None,
     minimal_output: bool | None = None,
+    enable_reranking: bool | None = None,
+    rerank_top_k: int = 50,
 ) -> dict[str, Any]:
     """
     Search indexed content using natural language queries.
 
     This tool provides function-level precision search with intelligent chunking,
-    supporting multiple search modes and context expansion for better code understanding.
+    supporting multiple search modes, context expansion, and two-stage retrieval
+    with cross-encoder reranking for improved accuracy.
 
     Args:
         query: Natural language search query
@@ -571,6 +592,13 @@ async def search(
                        - True: Returns only essential fields (file_path, content, line numbers, breadcrumb)
                        - False: Returns full results with all metadata and scores
                        - None: Uses MCP_MINIMAL_OUTPUT environment variable (default: true)
+        enable_reranking: Enable cross-encoder reranking for improved accuracy (default: env RERANKER_ENABLED)
+                         - True: Use two-stage retrieval with reranking
+                         - False: Use single-stage vector search only
+                         - None: Use RERANKER_ENABLED environment variable
+        rerank_top_k: Number of candidates to retrieve for reranking (default: 50)
+                     Only used when enable_reranking is True. Higher values may improve
+                     result quality but increase latency.
 
     Returns:
         Dictionary containing search results with metadata, scores, and context.
@@ -586,6 +614,8 @@ async def search(
         context_chunks,
         target_projects,
         collection_types,
+        enable_reranking,
+        rerank_top_k,
     )
     # Apply output filtering
     return filter_search_results(results, minimal_output)
@@ -600,9 +630,11 @@ def search_sync(
     context_chunks: int = 1,
     target_projects: list[str] | None = None,
     collection_types: list[str] | None = None,
+    enable_reranking: bool | None = None,
+    rerank_top_k: int = 50,
 ) -> dict[str, Any]:
     """
-    Synchronous implementation of search functionality.
+    Synchronous implementation of search functionality with two-stage retrieval.
 
     Args:
         query: Natural language search query
@@ -617,6 +649,8 @@ def search_sync(
                         - ["config"] - Only search configuration files
                         - ["documentation"] - Only search documentation files
                         - None - Search all collection types (default)
+        enable_reranking: Enable cross-encoder reranking (default: env RERANKER_ENABLED)
+        rerank_top_k: Number of candidates for reranking (default: 50)
 
     Returns:
         Dictionary containing search results with metadata, scores, and context
@@ -745,8 +779,29 @@ def search_sync(
         # Create metadata extractor
         metadata_extractor = _create_general_metadata_extractor()
 
-        # Perform search
-        logger.info(f"Searching {len(search_collections)} collections for query: '{query[:50]}...'")
+        # Determine if reranking should be used
+        if enable_reranking is None:
+            # Check environment variable
+            enable_reranking = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
+
+        # Check if reranker is available
+        reranker = None
+        reranking_applied = False
+        if enable_reranking:
+            reranker = get_reranker_service()
+            if reranker and not reranker.is_available():
+                logger.warning("Reranker requested but not available, falling back to single-stage search")
+                reranker = None
+
+        # Determine how many results to retrieve from Stage 1
+        # If reranking, get more candidates; otherwise get exactly n_results
+        stage1_limit = rerank_top_k if reranker else n_results
+
+        # Perform Stage 1: Vector Search
+        logger.info(
+            f"Searching {len(search_collections)} collections for query: '{query[:50]}...' "
+            f"(stage1_limit={stage1_limit}, reranking={'enabled' if reranker else 'disabled'})"
+        )
 
         search_results = _perform_hybrid_search(
             qdrant_client=qdrant_client,
@@ -754,10 +809,40 @@ def search_sync(
             query=query,
             query_embedding=query_embedding,
             search_collections=search_collections,
-            n_results=n_results,
+            n_results=stage1_limit,
             search_mode=search_mode,
             metadata_extractor=metadata_extractor,
         )
+
+        # Stage 2: Reranking (if enabled and results available)
+        if reranker and search_results:
+            logger.info(f"Stage 2: Reranking {len(search_results)} candidates")
+            try:
+                reranked_results = reranker.rerank_results(
+                    query=query,
+                    results=search_results,
+                    top_k=n_results,
+                )
+
+                # Convert RerankedResult objects back to dict format
+                search_results = [
+                    {
+                        "content": r.content,
+                        "file_path": r.file_path,
+                        "score": r.rerank_score,
+                        "original_score": r.original_score,
+                        "reranked": True,
+                        **r.metadata,
+                    }
+                    for r in reranked_results
+                ]
+                reranking_applied = True
+                logger.info(f"Reranking complete: {len(search_results)} results after reranking")
+
+            except Exception as e:
+                logger.warning(f"Reranking failed, using original results: {e}")
+                # Fall back to original results, limit to n_results
+                search_results = search_results[:n_results]
 
         # Expand context if requested
         if include_context and search_results and context_chunks > 0:
@@ -802,6 +887,9 @@ def search_sync(
                 "collections_count": len(search_collections),
                 "context_expanded": include_context and context_chunks > 0,
                 "context_chunks": context_chunks if include_context else 0,
+                "reranking_enabled": enable_reranking,
+                "reranking_applied": reranking_applied,
+                "stage1_candidates": stage1_limit if reranking_applied else n_results,
             },
         }
 
