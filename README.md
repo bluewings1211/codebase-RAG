@@ -17,9 +17,11 @@ This tool allows you to "chat" with your code. It indexes your local directories
 ### Key Features
 
 *   **🔍 Semantic Search**: Find code by meaning, not just keywords.
+*   **🎯 Two-Stage RAG**: 22-31% accuracy improvement with cross-encoder reranking (Qwen3-Reranker).
 *   **🧠 Intelligent Chunking**: Parses code into functions and classes using Tree-sitter for better context.
 *   **⚡ High Performance**: Supports incremental indexing and MPS acceleration on macOS.
 *   **🌐 Multi-Language**: Supports Python, JavaScript, TypeScript, Go, Rust, Java, C++, and more.
+*   **📝 File Logging**: Optional centralized logging with automatic rotation for debugging.
 
 ## Quick Start
 

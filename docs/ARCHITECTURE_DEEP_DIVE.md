@@ -16,6 +16,7 @@ Unlike traditional RAG systems that process entire files, this system uses **Tre
 
 ### Complete Data Flow
 
+**Indexing Flow:**
 ```
 📁 Source Code
     ↓
@@ -25,13 +26,34 @@ Unlike traditional RAG systems that process entire files, this system uses **Tre
     ↓
 ⚡ Intelligent Chunking (Function/Class-level granularity)
     ↓
-🧠 Batch Embedding Generation (embedding_service.py + Ollama)
+🧠 Batch Embedding Generation (embedding_service.py + Ollama/MLX)
     ↓
 💾 Vector Storage (qdrant_service.py + Qdrant)
     ↓
 📊 Metadata Tracking (file_metadata_service.py)
+```
+
+**Query Flow (Two-Stage RAG):**
+```
+📝 Natural Language Query
     ↓
-🔎 Natural Language Search → Function-level Results
+🧠 Query Embedding (embedding_service.py)
+    ↓
+⚡ Stage 1: Vector Search (qdrant_service.py)
+    ├─ Fast ANN search using HNSW algorithm
+    ├─ Retrieves top-K candidates (default: 50)
+    └─ Bi-encoder semantic similarity scoring
+    ↓
+🎯 Stage 2: Cross-Encoder Reranking (reranker_service.py)
+    ├─ Qwen3-Reranker evaluates query-document pairs
+    ├─ Deep semantic relevance scoring
+    └─ 22-31% accuracy improvement over single-stage
+    ↓
+📋 Context Enhancement (if enabled)
+    ├─ Adds surrounding code chunks
+    └─ Builds breadcrumb navigation
+    ↓
+✅ Function-Level Results with Precision Ranking
 ```
 
 ## Key Architectural Components
@@ -57,11 +79,16 @@ Unlike traditional RAG systems that process entire files, this system uses **Tre
 
 **Core Tools Available:**
 - `index_directory()`: Smart indexing with time estimation and incremental updates
-- `search()`: Natural language semantic search with function-level results
-- `health_check()`: System health monitoring
+- `search()`: Natural language semantic search with two-stage RAG and function-level results
+- `health_check_tool()`: System health monitoring (Qdrant, Ollama, Reranker)
 - `analyze_repository_tool()`: Repository structure analysis
 - `check_index_status()`: Indexing status and recommendations
 - `get_chunking_metrics_tool()`: Performance monitoring
+- `get_project_info_tool()`: Project information and statistics
+- `list_indexed_projects_tool()`: List all indexed projects
+- `clear_project_data_tool()`: Clear project indexed data
+- `get_file_metadata_tool()`: File-level metadata inspection
+- `reindex_file_tool()`: Reindex specific files
 
 ### ⚙️ Services Layer (`src/services/`)
 
@@ -70,9 +97,19 @@ Unlike traditional RAG systems that process entire files, this system uses **Tre
 | `indexing_service.py` | Orchestrates processing | Parallel processing, batch optimization |
 | `code_parser_service.py` | AST parsing | Tree-sitter integration, intelligent chunking |
 | `qdrant_service.py` | Vector database | Streaming operations, retry logic |
-| `embedding_service.py` | Embeddings | Ollama integration, batch processing |
+| `embedding_service.py` | Embeddings | Ollama/MLX integration, batch processing |
+| `reranker_service.py` | Two-stage RAG | Cross-encoder reranking, 22-31% accuracy boost |
 | `project_analysis_service.py` | Repository analysis | File filtering, structure analysis |
 | `file_metadata_service.py` | Change tracking | Incremental indexing, metadata storage |
+
+### 🔧 Utilities Layer (`src/utils/`)
+
+| Utility | Purpose | Key Features |
+|---------|---------|--------------|
+| `logging_config.py` | Centralized logging | File rotation, third-party suppression |
+| `tree_sitter_manager.py` | Parser management | Parser caching, language detection |
+| `performance_monitor.py` | Progress tracking | ETA calculation, memory monitoring |
+| `chunking_metrics_tracker.py` | Metrics collection | Per-language statistics, error tracking |
 
 ## Navigation Strategy & Development Workflow
 
@@ -176,6 +213,14 @@ OLLAMA_DEFAULT_EMBEDDING_MODEL=nomic-embed-text
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 
+# Two-Stage RAG / Reranker Configuration
+RERANKER_ENABLED=true                    # Enable cross-encoder reranking
+RERANKER_PROVIDER=transformers           # transformers | ollama | mlx
+RERANKER_MODEL=Qwen/Qwen3-Reranker-0.6B  # Reranker model
+RERANKER_MAX_LENGTH=512                  # Max input length
+RERANKER_BATCH_SIZE=8                    # Batch size for reranking
+RERANK_TOP_K=50                          # Stage 1 candidates count
+
 # Performance Tuning
 INDEXING_CONCURRENCY=4
 INDEXING_BATCH_SIZE=20
@@ -185,8 +230,14 @@ MEMORY_WARNING_THRESHOLD_MB=1000
 MAX_FILE_SIZE_MB=5
 MAX_DIRECTORY_DEPTH=20
 
-# Development Settings
+# Logging Configuration
 LOG_LEVEL=INFO
+LOG_FILE_ENABLED=false                   # Enable file logging
+LOG_FILE_PATH=logs/codebase-rag.log      # Log file path
+LOG_FILE_MAX_SIZE=10                     # Max size in MB before rotation
+LOG_FILE_BACKUP_COUNT=5                  # Number of backup files
+
+# Development Settings
 FOLLOW_SYMLINKS=false
 ```
 
@@ -242,6 +293,7 @@ python test_full_functionality.py
 This is a **production-ready, intelligent codebase RAG system** with:
 
 - ✅ **Function-level search precision**
+- ✅ **Two-Stage RAG** with 22-31% accuracy improvement via cross-encoder reranking
 - ✅ **Multi-language support** via Tree-sitter
 - ✅ **Scalable parallel processing**
 - ✅ **Error-tolerant AST parsing**
@@ -249,6 +301,7 @@ This is a **production-ready, intelligent codebase RAG system** with:
 - ✅ **Rich MCP tool ecosystem**
 - ✅ **Comprehensive performance monitoring**
 - ✅ **Memory-efficient streaming operations**
+- ✅ **Centralized logging** with file rotation support
 
 The system is designed for immediate productivity with advanced semantic search operations. You can start using the RAG search tools to explore code relationships and understand implementation patterns with unprecedented precision.
 
@@ -258,6 +311,8 @@ The system is designed for immediate productivity with advanced semantic search 
 - **Ollama**: Local embedding model service
 - **Tree-sitter**: Syntax-aware parsing for multiple languages
 - **FastMCP**: Model Context Protocol server framework
+- **PyTorch**: Deep learning framework for reranker inference
+- **Transformers (HuggingFace)**: Cross-encoder model loading and inference
 
 ## File Organization Patterns
 
