@@ -9,6 +9,7 @@ This document provides a comprehensive reference for all configuration options a
     *   [Embedding Provider](#embedding-provider)
     *   [MLX Server (Apple Silicon)](#mlx-server-apple-silicon)
     *   [Ollama](#ollama)
+    *   [Reranker (Two-Stage RAG)](#reranker-two-stage-rag)
     *   [Qdrant Database](#qdrant-database)
     *   [File Processing](#file-processing)
     *   [Performance Tuning](#performance-tuning)
@@ -92,6 +93,51 @@ Default embedding provider configuration.
 *   `nomic-embed-text` (recommended, 768 dimensions)
 *   `mxbai-embed-large` (1024 dimensions)
 *   Any other Ollama-compatible embedding model
+
+---
+
+### Reranker (Two-Stage RAG)
+
+Configure the cross-encoder reranker for improved search accuracy. The two-stage RAG system improves search accuracy by **22-31%** over single-stage vector search.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RERANKER_ENABLED` | `true` | Enable cross-encoder reranking for two-stage RAG |
+| `RERANKER_PROVIDER` | `transformers` | Reranker provider: `transformers`, `ollama`, or `mlx` |
+| `RERANKER_MODEL` | `Qwen/Qwen3-Reranker-0.6B` | Cross-encoder model name |
+| `RERANKER_MAX_LENGTH` | `512` | Maximum input length for query + document |
+| `RERANKER_BATCH_SIZE` | `8` | Batch size for reranking operations |
+| `RERANK_TOP_K` | `50` | Number of candidates retrieved in Stage 1 for reranking |
+
+#### How Two-Stage RAG Works
+
+1. **Stage 1 - Fast Vector Search**: Retrieves top-K candidates (default: 50) using approximate nearest neighbor (ANN) search
+2. **Stage 2 - Cross-Encoder Reranking**: Evaluates query-document pairs together using Qwen3-Reranker for precise relevance scoring
+
+#### Performance Characteristics
+
+| Hardware | Reranking Latency (50 candidates) |
+|----------|-----------------------------------|
+| Apple Silicon (MPS) | ~100ms |
+| CUDA GPU | ~80-150ms |
+| CPU | ~400ms |
+
+#### Reranker Model Options
+
+*   `Qwen/Qwen3-Reranker-0.6B` (default, smallest, fastest)
+*   `Qwen/Qwen3-Reranker-4B` (medium, better quality)
+*   `Qwen/Qwen3-Reranker-8B` (largest, best quality)
+
+#### Disabling Reranking
+
+For speed-critical applications, disable reranking:
+
+```bash
+# In your .env file
+RERANKER_ENABLED=false
+```
+
+Or disable per-query using the search tool's `enable_reranking=false` parameter.
 
 ---
 

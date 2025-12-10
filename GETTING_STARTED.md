@@ -13,6 +13,7 @@ Ensure you have the following installed:
 *   **uv** (Python package manager): [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 *   **Docker** (Recommended for Qdrant database)
 *   **Ollama** (For embedding models)
+*   **~2GB disk space** (For Qwen3-Reranker model, downloaded automatically on first search)
 
 ### 2. Setup Script
 
@@ -71,9 +72,46 @@ The server exposes several tools to the AI. Here are the most common ones:
 
 *   **`search`**: The primary tool. Finds relevant code based on natural language.
     *   *Usage*: "Search for authentication logic."
+    *   *Note*: Two-stage RAG with reranking is enabled by default for 22-31% better accuracy.
 *   **`index_directory`**: triggers indexing from within the chat (best for small updates).
     *   *Usage*: "Index the 'src/utils' folder."
-*   **`health_check`**: Verifies everything is running smoothly.
+*   **`health_check_tool`**: Verifies everything is running smoothly.
     *   *Usage*: "Check if the RAG server is healthy."
 
 For a complete list of tools and their parameters, see [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
+
+## Key Features
+
+### Two-Stage RAG (Enabled by Default)
+
+The search tool uses a two-stage retrieval approach for improved accuracy:
+
+1. **Stage 1**: Fast vector search retrieves candidate results
+2. **Stage 2**: Cross-encoder (Qwen3-Reranker) reranks for precise relevance
+
+This improves search accuracy by **22-31%** over single-stage vector search. The reranker model is downloaded automatically on first use (~600MB).
+
+To disable reranking for faster (but less accurate) searches:
+```bash
+# In .env file
+RERANKER_ENABLED=false
+```
+
+### File Logging (For Debugging)
+
+Enable file logging to debug indexing or search issues:
+
+```bash
+# In .env file
+LOG_FILE_ENABLED=true
+LOG_LEVEL=DEBUG
+LOG_FILE_PATH=logs/debug.log
+```
+
+Logs are automatically rotated when they reach 10MB. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
+
+## Next Steps
+
+*   **[Configuration Guide](docs/CONFIGURATION.md)**: Customize performance settings
+*   **[MCP Tools Reference](docs/MCP_TOOLS.md)**: Complete tool documentation
+*   **[Architecture](ARCHITECTURE.md)**: Understand how the system works

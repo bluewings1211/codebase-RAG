@@ -309,6 +309,52 @@ MEMORY_WARNING_THRESHOLD_MB=1000 # Adjust for available RAM
    search(query="...", context_chunks=2)
    ```
 
+#### Reranking Configuration (Two-Stage RAG)
+
+The search tool uses two-stage RAG with cross-encoder reranking by default, improving accuracy by 22-31%.
+
+1. **When to Use Reranking (Default)**
+   - Complex semantic queries requiring precise understanding
+   - Architectural analysis and code understanding tasks
+   - When accuracy is more important than speed
+   ```
+   # High-precision search (reranking enabled by default)
+   search(
+     query="Find authentication implementation patterns",
+     n_results=10
+   )
+   ```
+
+2. **When to Disable Reranking**
+   - Speed-critical applications requiring fast responses
+   - Simple keyword-based searches
+   - Large result sets (>50 results)
+   ```
+   # Fast search without reranking
+   search(
+     query="Find all API endpoints",
+     enable_reranking=false,
+     n_results=30
+   )
+   ```
+
+3. **Tuning Rerank Parameters**
+   - Higher `rerank_top_k` (50-100) improves quality but increases latency
+   - Lower `rerank_top_k` (20-30) for faster results with moderate quality
+   ```
+   # More candidates for complex queries
+   search(
+     query="Complex architectural pattern analysis",
+     rerank_top_k=100,
+     n_results=15
+   )
+   ```
+
+4. **Performance Characteristics**
+   - Reranking latency: ~100ms (Apple Silicon/MPS) to ~400ms (CPU)
+   - Quality improvement: 22-31% better accuracy
+   - First search may be slower (model loading)
+
 ## Knowledge Base Usage Patterns
 
 ### Development Workflows
@@ -387,12 +433,40 @@ MEMORY_WARNING_THRESHOLD_MB=1000 # Adjust for available RAM
 
 ## Troubleshooting Common Issues
 
+### Debugging with File Logging
+
+Enable file logging to diagnose issues:
+
+```bash
+# In .env file
+LOG_FILE_ENABLED=true
+LOG_LEVEL=DEBUG
+LOG_FILE_PATH=logs/debug.log
+```
+
+#### Useful Log Analysis Commands
+```bash
+# Watch logs in real-time during indexing
+tail -f logs/debug.log
+
+# Find errors
+grep "ERROR" logs/debug.log
+
+# Check reranking performance
+grep "reranking" logs/debug.log
+
+# Find slow operations
+grep "duration" logs/debug.log | grep -E "[0-9]{2,}\.[0-9]+s"
+```
+
+Logs are automatically rotated at 10MB with 5 backup files. See [CONFIGURATION.md](./CONFIGURATION.md#logging) for options.
+
 ### Indexing Problems
 
 #### Slow Indexing Performance
 1. **Check System Resources**
    ```
-   health_check()
+   health_check_tool()
    get_indexing_progress_tool()
    ```
 
@@ -402,7 +476,7 @@ MEMORY_WARNING_THRESHOLD_MB=1000 # Adjust for available RAM
    - Exclude unnecessary files with `.ragignore`
 
 3. **Monitor Progress**
-   - Use verbose logging for detailed insights
+   - Enable file logging for detailed insights (`LOG_FILE_ENABLED=true`)
    - Check chunking metrics for bottlenecks
    - Verify parser health for syntax errors
 

@@ -6,7 +6,7 @@ Comprehensive documentation for all MCP tools provided by the Codebase RAG MCP S
 
 ### `search` - Semantic Code Search
 
-Search indexed codebases using natural language queries with function-level precision.
+Search indexed codebases using natural language queries with function-level precision. Supports **Two-Stage RAG** with cross-encoder reranking for 22-31% improved accuracy.
 
 **Parameters:**
 - `query` (required): Natural language search query
@@ -16,12 +16,46 @@ Search indexed codebases using natural language queries with function-level prec
 - `include_context` (optional, default: true): Include surrounding code context
 - `context_chunks` (optional, default: 1): Number of context chunks before/after (0-5)
 - `target_projects` (optional): List of specific project names to search in
+- `collection_types` (optional): Filter by collection type (["code"], ["config"], ["documentation"], or combination)
+- `minimal_output` (optional, default: env MCP_MINIMAL_OUTPUT): Return simplified output for AI agents
+- `enable_reranking` (optional, default: env RERANKER_ENABLED=true): Enable two-stage retrieval with cross-encoder reranking
+- `rerank_top_k` (optional, default: 50): Number of candidates for Stage 1 vector search before reranking (1-200)
+
+**Two-Stage RAG Retrieval:**
+
+The search tool implements a two-stage retrieval approach when `enable_reranking=true` (default):
+
+1. **Stage 1 - Fast Vector Search**: Retrieves top-K candidates using ANN search (controlled by `rerank_top_k`)
+   - Optimized for speed using Qdrant's HNSW algorithm
+   - Bi-encoder embeddings for independent query/document encoding
+
+2. **Stage 2 - Cross-Encoder Reranking**: Uses Qwen3-Reranker to evaluate query-document pairs
+   - Deep semantic understanding through attention mechanism
+   - Reranks to final top-N results (controlled by `n_results`)
+   - 22-31% accuracy improvement over single-stage retrieval
+
+**Performance Considerations:**
+- Reranking adds ~100-400ms latency depending on hardware (faster on Apple Silicon with MPS)
+- Higher `rerank_top_k` (50-100) improves quality but increases latency
+- Disable reranking (`enable_reranking=false`) for speed-critical applications
 
 **Example Queries:**
 - "Find functions that handle file uploads"
 - "Show me React components that use useState hook"
 - "Find error handling patterns in Python"
 - "Locate database connection initialization code"
+
+**Example with Reranking Configuration:**
+```python
+# High-precision search (default, reranking enabled)
+search(query="authentication implementation patterns", n_results=10)
+
+# Faster search without reranking
+search(query="find all API endpoints", enable_reranking=false, n_results=20)
+
+# Custom reranking with more candidates
+search(query="complex data flow analysis", rerank_top_k=100, n_results=15)
+```
 
 ## Indexing Tools
 
@@ -54,13 +88,14 @@ Get information about the current indexing state of a directory.
 
 ## Analysis Tools
 
-### `health_check` - Server Health Check
+### `health_check_tool` - Server Health Check
 
 Verify MCP server health and dependency connectivity.
 
 **Features:**
 - Qdrant database connectivity test
 - Ollama service availability check
+- Reranker service status check
 - System resource monitoring
 - Performance metrics collection
 
