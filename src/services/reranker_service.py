@@ -85,9 +85,13 @@ class RerankerService:
         self.enabled = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
         self.provider = os.getenv("RERANKER_PROVIDER", self.PROVIDER_TRANSFORMERS).lower()
         self.model_name = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
-        self.max_length = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
-        self.batch_size = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
-        self.default_top_k = int(os.getenv("RERANK_TOP_K", "50"))
+        try:
+            self.max_length = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
+            self.batch_size = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
+            self.default_top_k = int(os.getenv("RERANK_TOP_K", "50"))
+        except ValueError as e:
+            self.logger.error(f"Invalid reranker configuration. Please check your .env file: {e}")
+            raise
 
         # Model state (lazy loading)
         self._model = None
@@ -150,6 +154,9 @@ class RerankerService:
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
             # Load tokenizer with left padding for causal LM
+            # Note: trust_remote_code=True is required for Qwen3-Reranker models
+            # as they use custom tokenization code. This is a known trusted model
+            # from Qwen/Alibaba. For untrusted models, review the code before enabling.
             self._tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
                 padding_side="left",
@@ -161,6 +168,8 @@ class RerankerService:
                 self._tokenizer.pad_token = self._tokenizer.eos_token
 
             # Load model
+            # Note: trust_remote_code=True is required for Qwen3-Reranker models.
+            # See tokenizer comment above for security considerations.
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 torch_dtype=torch.float16,  # Use FP16 for efficiency
@@ -411,12 +420,12 @@ class RerankerService:
             )
 
             # Place scores back at original indices
-            for orig_idx, score in zip(batch_indices, batch_scores, strict=False):
+            for orig_idx, score in zip(batch_indices, batch_scores, strict=True):
                 all_scores[orig_idx] = score
 
         # Build reranked results
         reranked = []
-        for result, score in zip(valid_results, all_scores, strict=False):
+        for result, score in zip(valid_results, all_scores, strict=True):
             # Skip results below threshold
             if score < min_score_threshold:
                 continue
