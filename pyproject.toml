@@ -25,6 +25,9 @@ dependencies = [
     "tree-sitter-java",
     "tree-sitter-cpp",
     "requests>=2.31.0,<3",
+    # Reranker dependencies (Two-Stage RAG)
+    "transformers>=4.51.0",
+    "sentencepiece>=0.2.0",
 ]
 
 [dependency-groups]

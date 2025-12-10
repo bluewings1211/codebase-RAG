@@ -21,6 +21,7 @@ src/
 │   ├── code_parser_service.py    # AST parsing and chunking
 │   ├── indexing_service.py       # Orchestration and processing
 │   ├── embedding_service.py      # Ollama integration
+│   ├── reranker_service.py       # Cross-encoder reranking (Two-Stage RAG)
 │   ├── qdrant_service.py         # Vector database operations
 │   └── project_analysis_service.py # Repository analysis
 ├── tools/                     # MCP tool implementations
@@ -52,11 +53,17 @@ Root Files:
    AST Re-parsing → Smart Chunking → Embedding → DB Updates → Metadata Updates
    ```
 
-   **Query Flow with Precision Results:**
+   **Query Flow with Two-Stage RAG (Precision Results):**
    ```
-   Natural Language → Embedding → Vector Search → Function-Level Matches →
-   Context Enhancement → Ranked Results with Breadcrumbs
+   Natural Language → Embedding → Stage 1: Vector Search (Top-K Candidates) →
+   Stage 2: Cross-Encoder Reranking → Function-Level Matches →
+   Context Enhancement → Reranked Results with Breadcrumbs
    ```
+
+   **Two-Stage Retrieval Benefits:**
+   - Stage 1: Fast ANN search retrieves 50+ candidates efficiently
+   - Stage 2: Cross-encoder (Qwen3-Reranker) evaluates query-document pairs for precise relevance
+   - Improves search accuracy by 22-31% over single-stage embedding-only approaches
 
    **Manual Tool Flow:**
    ```
@@ -71,7 +78,11 @@ Environment variables (`.env` file):
 ### MCP Tools Available
 
 #### `index_directory(directory, patterns, recursive, clear_existing, incremental, project_name)`
-#### `search(query, n_results, cross_project, search_mode, include_context, context_chunks, target_projects)`
+#### `search(query, n_results, cross_project, search_mode, include_context, context_chunks, target_projects, collection_types, enable_reranking, rerank_top_k)`
+
+**Search Parameters:**
+- `enable_reranking`: Enable two-stage retrieval with cross-encoder reranking (default: true via env)
+- `rerank_top_k`: Number of candidates for Stage 1 before reranking (default: 50)
 
 ## Intelligent Code Chunking System
 
