@@ -44,6 +44,7 @@ from services.file_discovery_service import FileDiscoveryService
 from services.indexing_pipeline import IndexingPipeline
 from services.indexing_reporter import IndexingReporter
 from utils import format_duration, format_memory_size
+from utils.logging_config import setup_logging
 
 
 class ManualIndexingTool:
@@ -79,19 +80,12 @@ class ManualIndexingTool:
         self.logger = logging.getLogger(__name__)
 
     def setup_logging(self):
-        """Setup logging configuration."""
-        log_level = logging.DEBUG if self.verbose else logging.INFO
-
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[logging.StreamHandler(sys.stdout)],
+        """Setup logging configuration using centralized config."""
+        setup_logging(
+            stream=sys.stdout,
+            verbose=self.verbose,
+            suppress_third_party=not self.verbose,
         )
-
-        # Reduce noise from third-party libraries
-        if not self.verbose:
-            logging.getLogger("qdrant_client").setLevel(logging.WARNING)
-            logging.getLogger("httpx").setLevel(logging.WARNING)
 
     def validate_arguments(self, directory: str, mode: str) -> tuple[bool, str]:
         """

@@ -258,7 +258,7 @@ class RerankerService:
             return relevance_score
 
         except Exception as e:
-            self.logger.warning(f"Error computing relevance score: {e}")
+            self.logger.error(f"Error computing relevance score: {e}", exc_info=True)
             return 0.0
 
     def _compute_batch_scores(
