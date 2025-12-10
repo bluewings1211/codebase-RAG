@@ -13,13 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from main import app
+from utils.logging_config import setup_logging
 
 # Configure logging to stderr so it doesn't interfere with JSON-RPC communication
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stderr,
-)
+setup_logging(stream=sys.stderr)
 
 
 async def main():

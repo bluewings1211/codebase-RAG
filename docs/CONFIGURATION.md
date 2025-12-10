@@ -208,11 +208,28 @@ Control MCP tool response behavior.
 
 ### Logging
 
-Configure logging verbosity.
+Configure logging verbosity and optional file output.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_FILE_ENABLED` | `false` | Enable file logging for debugging |
+| `LOG_FILE_PATH` | `logs/codebase-rag.log` | Path to log file (relative or absolute) |
+| `LOG_FILE_MAX_SIZE` | `10` | Maximum log file size in MB before rotation |
+| `LOG_FILE_BACKUP_COUNT` | `5` | Number of backup log files to keep |
+
+**Debugging with File Logging:**
+
+To enable file logging for debugging issues:
+
+```bash
+# In your .env file
+LOG_FILE_ENABLED=true
+LOG_LEVEL=DEBUG
+LOG_FILE_PATH=logs/debug.log
+```
+
+Log files are automatically rotated when they reach the maximum size. The `logs/` directory will be created automatically if it doesn't exist.
 
 ---
 
