@@ -8,8 +8,27 @@ import logging
 from pathlib import Path
 from typing import Any
 
+# Re-export get_qdrant_client for easier mocking in tests
+from tools.database.qdrant_utils import get_qdrant_client
+
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Export for external use
+__all__ = [
+    "get_qdrant_client",
+    "get_current_project",
+    "get_collection_name",
+    "load_ragignore_patterns",
+    "clear_project_collections",
+    "list_indexed_projects",
+    "get_available_project_names",
+    "validate_project_exists",
+    "get_project_collections",
+    "normalize_project_name",
+    "get_project_metadata",
+    "delete_file_chunks",
+]
 
 # Global variables for caching
 _current_project = None
@@ -220,8 +239,6 @@ def clear_project_collections() -> dict[str, Any]:
     Returns:
         Dictionary with results of clearing operations
     """
-    from tools.database.qdrant_utils import get_qdrant_client
-
     current_project = get_current_project()
     if not current_project:
         return {"error": "No project context found", "cleared": []}
@@ -264,8 +281,6 @@ def list_indexed_projects() -> dict[str, Any]:
         Dictionary with information about all indexed projects
     """
     try:
-        from tools.database.qdrant_utils import get_qdrant_client
-
         client = get_qdrant_client()
         all_collections = [c.name for c in client.get_collections().collections]
 
@@ -343,24 +358,36 @@ def get_available_project_names(collections: list[str]) -> list[str]:
     Returns:
         List of available project names
     """
+    # Known collection type suffixes
+    collection_type_suffixes = {"code", "config", "documentation", "file_metadata"}
+
     project_names = set()
     for collection in collections:
+        # Skip metadata collections entirely - they use format "project_{name}_file_metadata"
+        # which would incorrectly extract "{name}_file" as the project name
+        if collection.endswith("_file_metadata"):
+            continue
+
         if collection.startswith("project_"):
             # Extract project name from "project_{name}_{type}"
             # Handle multi-part project names like "project_PocketFlow_Template_Python_code"
             parts = collection.split("_")
             if len(parts) >= 3:
-                # Everything between 'project_' and the last '_type' is the project name
-                project_name = "_".join(parts[1:-1])
-                project_names.add(project_name)
+                # Check if the last part is a known collection type
+                if parts[-1] in collection_type_suffixes:
+                    # Everything between 'project_' and the last '_type' is the project name
+                    project_name = "_".join(parts[1:-1])
+                    project_names.add(project_name)
         elif collection.startswith("dir_"):
             # Extract directory name from "dir_{name}_{type}"
             # Handle multi-part directory names like "dir_My_Project_Name_code"
             parts = collection.split("_")
             if len(parts) >= 3:
-                # Everything between 'dir_' and the last '_type' is the directory name
-                dir_name = "_".join(parts[1:-1])
-                project_names.add(dir_name)
+                # Check if the last part is a known collection type
+                if parts[-1] in collection_type_suffixes:
+                    # Everything between 'dir_' and the last '_type' is the directory name
+                    dir_name = "_".join(parts[1:-1])
+                    project_names.add(dir_name)
 
     return sorted(project_names)
 
@@ -375,8 +402,6 @@ def validate_project_exists(project_name: str) -> dict[str, Any]:
         Dictionary with validation results
     """
     try:
-        from tools.database.qdrant_utils import get_qdrant_client
-
         client = get_qdrant_client()
         all_collections = [c.name for c in client.get_collections().collections]
 
@@ -434,8 +459,6 @@ def get_project_collections(project_name: str) -> dict[str, Any]:
         Dictionary with project collections information
     """
     try:
-        from tools.database.qdrant_utils import get_qdrant_client
-
         client = get_qdrant_client()
         all_collections = [c.name for c in client.get_collections().collections]
 
@@ -537,8 +560,6 @@ def get_project_metadata(project_name: str) -> dict[str, Any]:
 
         if file_metadata_collections:
             try:
-                from tools.database.qdrant_utils import get_qdrant_client
-
                 client = get_qdrant_client()
 
                 # Query a few points from metadata collection to extract path info
@@ -608,7 +629,6 @@ def delete_file_chunks(file_path: str, collection_name: str | None = None) -> di
         Dictionary with deletion results
     """
     from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-    from tools.database.qdrant_utils import get_qdrant_client
 
     logger.info(f"Deleting chunks for file: {file_path}")
 

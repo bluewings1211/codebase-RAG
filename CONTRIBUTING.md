@@ -30,7 +30,21 @@ We provide a helper script to quickly set up your environment.
     *   Create a `.env` file from the example.
     *   Check for Docker and Ollama availability.
 
-3.  **Activate Virtual Environment**:
+3.  **Install development dependencies**:
+    ```bash
+    # Install with dev dependencies (testing, linting, RAGAS)
+    uv sync --dev
+
+    # Or install production dependencies only
+    uv sync
+    ```
+
+    The `--dev` flag installs additional packages for development:
+    *   Testing: `pytest`, `pytest-cov`, `pytest-xdist`
+    *   RAG Evaluation: `ragas`, `datasets`
+    *   Linting: `ruff`, `black`, `pre-commit`
+
+4.  **Activate Virtual Environment**:
     `uv` manages the virtual environment for you. You can run commands using `uv run <command>` or activate it manually:
     ```bash
     source .venv/bin/activate
@@ -64,13 +78,72 @@ The configuration for `ruff` and `black` is located in `pyproject.toml`.
 
 ## Running Tests
 
-We use `pytest` for testing.
+We use `pytest` for testing with marker-based test categorization.
+
+### Quick Reference
 
 ```bash
-uv run pytest tests/
+# Run all fast tests (recommended before commits)
+uv run pytest src/tests/ -m "not slow and not integration and not requires_qdrant"
+
+# Run only unit tests (no external dependencies)
+uv run pytest src/tests/ -m "unit"
+
+# Run all tests
+uv run pytest src/tests/
+
+# Run with coverage report
+uv run pytest src/tests/ --cov=src --cov-report=html
+
+# Run tests in parallel (faster)
+uv run pytest src/tests/ -n auto
 ```
 
-Please ensure all tests pass before submitting your changes. If you are adding new features, please include appropriate tests.
+### Test Markers
+
+Tests are categorized using pytest markers:
+
+| Marker | Description | When to Run |
+|--------|-------------|-------------|
+| `unit` | Fast tests with no external dependencies | Always |
+| `slow` | Tests that take > 10 seconds | Before major commits |
+| `integration` | Requires external services (Qdrant, Ollama) | Before PR |
+| `requires_qdrant` | Requires Qdrant database | With Qdrant running |
+| `requires_ollama` | Requires Ollama service | With Ollama running |
+| `rag_quality` | RAG quality evaluation tests | Periodically |
+
+### Adding Markers to Tests
+
+When writing new tests, add appropriate markers:
+
+```python
+import pytest
+
+@pytest.mark.unit
+def test_fast_function():
+    """Test that runs quickly without external services."""
+    pass
+
+@pytest.mark.requires_qdrant
+@pytest.mark.integration
+def test_with_database():
+    """Test that requires Qdrant to be running."""
+    pass
+```
+
+### RAG Quality Tests
+
+For RAG-specific quality testing, see `src/tests/test_rag_quality.py` and the documentation in `docs/RAG-testing-framework-and-ci-cd.md`.
+
+```bash
+# Run RAG quality tests (basic, no Ollama required)
+uv run pytest src/tests/test_rag_quality.py -m "rag_quality and not requires_ollama"
+
+# Run full RAG quality tests (requires Ollama)
+uv run pytest src/tests/test_rag_quality.py -m "rag_quality"
+```
+
+Please ensure all relevant tests pass before submitting your changes. If you are adding new features, please include appropriate tests with proper markers.
 
 ## Architecture and Design
 

@@ -766,3 +766,76 @@ def run_full_diagnostics(project_name: str | None = None) -> str:
     diagnostics = SearchDiagnostics()
     results = diagnostics.run_comprehensive_diagnostics(project_name)
     return diagnostics.generate_diagnostic_report(results)
+
+
+def create_search_quality_report(
+    qdrant_client: QdrantClient | None = None,
+    collection_names: list[str] | None = None,
+    test_queries: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a comprehensive search quality report.
+
+    Args:
+        qdrant_client: Optional Qdrant client instance
+        collection_names: Optional list of collection names to analyze
+        test_queries: Optional list of test queries to run
+
+    Returns:
+        Dictionary containing search quality report
+    """
+    diagnostics = SearchDiagnostics(qdrant_client)
+    report: dict[str, Any] = {
+        "timestamp": time.time(),
+        "collections_analyzed": collection_names or [],
+        "collection_health": {},
+        "consistency_check": {},
+        "overall_recommendations": [],
+    }
+
+    # Analyze each collection if specified
+    if collection_names:
+        for collection_name in collection_names:
+            try:
+                collection_info = diagnostics.qdrant_client.get_collection(collection_name)
+                health_data: dict[str, Any] = {
+                    "total_points": collection_info.points_count,
+                    "vector_size": collection_info.config.params.vectors.size,
+                    "distance_metric": collection_info.config.params.vectors.distance.name,
+                    "content_analysis": {"total_checked": 0, "empty_content_count": 0},
+                    "metadata_analysis": {"total_checked": 0, "missing_fields": 0},
+                    "issues": [],
+                }
+
+                # Sample points for analysis
+                points, _ = diagnostics.qdrant_client.scroll(collection_name, limit=100)
+                for point in points:
+                    health_data["content_analysis"]["total_checked"] += 1
+                    payload = point.payload or {}
+                    content = payload.get("content", "")
+                    if not content or (isinstance(content, str) and not content.strip()):
+                        health_data["content_analysis"]["empty_content_count"] += 1
+                        health_data["issues"].append(
+                            {
+                                "type": "empty_content",
+                                "point_id": point.id,
+                                "message": "Point has empty or missing content",
+                            }
+                        )
+
+                    # Check metadata
+                    health_data["metadata_analysis"]["total_checked"] += 1
+                    required_fields = ["file_path", "line_start", "line_end"]
+                    for field in required_fields:
+                        if field not in payload:
+                            health_data["metadata_analysis"]["missing_fields"] += 1
+
+                report["collection_health"][collection_name] = health_data
+            except Exception as e:
+                logger.warning(f"Error analyzing collection {collection_name}: {e}")
+                report["collection_health"][collection_name] = {
+                    "error": str(e),
+                    "total_points": 0,
+                    "issues": [],
+                }
+
+    return report

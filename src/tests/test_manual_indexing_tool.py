@@ -64,25 +64,25 @@ class TestManualIndexingTool(unittest.TestCase):
 
         self.assertTrue(tool.verbose)
 
-    @patch("logging.basicConfig")
-    def test_setup_logging_default(self, mock_basic_config):
+    @patch("manual_indexing.setup_logging")
+    def test_setup_logging_default(self, mock_setup_logging):
         """Test logging setup with default (non-verbose) mode."""
         ManualIndexingTool(verbose=False)
 
-        # Verify logging was configured
-        mock_basic_config.assert_called_once()
-        call_args = mock_basic_config.call_args
-        self.assertEqual(call_args[1]["level"], 20)  # INFO level
+        # Verify logging was configured via setup_logging
+        mock_setup_logging.assert_called_once()
+        call_kwargs = mock_setup_logging.call_args[1]
+        self.assertFalse(call_kwargs.get("verbose", True))
 
-    @patch("logging.basicConfig")
-    def test_setup_logging_verbose(self, mock_basic_config):
+    @patch("manual_indexing.setup_logging")
+    def test_setup_logging_verbose(self, mock_setup_logging):
         """Test logging setup with verbose mode."""
         ManualIndexingTool(verbose=True)
 
-        # Verify logging was configured
-        mock_basic_config.assert_called_once()
-        call_args = mock_basic_config.call_args
-        self.assertEqual(call_args[1]["level"], 10)  # DEBUG level
+        # Verify logging was configured via setup_logging
+        mock_setup_logging.assert_called_once()
+        call_kwargs = mock_setup_logging.call_args[1]
+        self.assertTrue(call_kwargs.get("verbose", False))
 
     def test_validate_arguments_valid_mode_and_directory(self):
         """Test argument validation with valid inputs."""
@@ -212,18 +212,15 @@ class TestManualIndexingTool(unittest.TestCase):
             self.assertTrue(mock_print.called)
 
     @async_test
-    @patch("time.time")
     @patch("builtins.print")
-    async def test_perform_indexing_clear_existing_success(self, mock_print, mock_time):
+    async def test_perform_indexing_clear_existing_success(self, mock_print):
         """Test successful clear_existing indexing operation."""
-        mock_time.side_effect = [1000.0, 1030.0]  # 30 second duration
-
         tool = ManualIndexingTool()
 
         # Mock discovery result
         mock_discovery = {"project_context": {"project_name": "test_project"}, "relevant_files": ["/test/file1.py"], "file_count": 1}
 
-        # Mock pipeline result
+        # Mock pipeline result - all attributes must be proper values (not MagicMock) for comparisons
         mock_result = MagicMock()
         mock_result.success = True
         mock_result.total_files_processed = 1
@@ -231,6 +228,9 @@ class TestManualIndexingTool(unittest.TestCase):
         mock_result.total_points_stored = 5
         mock_result.collections_used = ["project_test_project_code"]
         mock_result.performance_metrics = {"memory_usage_mb": 256}
+        mock_result.embedding_failures = 0  # Integer for comparison
+        mock_result.embedding_success_rate = 100.0  # Float for formatting
+        mock_result.failed_chunks = []
 
         with (
             patch.object(tool.file_discovery, "discover_project_files") as mock_discover,
@@ -256,18 +256,15 @@ class TestManualIndexingTool(unittest.TestCase):
             mock_summary.assert_called_once()
 
     @async_test
-    @patch("time.time")
     @patch("builtins.print")
-    async def test_perform_indexing_incremental_success(self, mock_print, mock_time):
+    async def test_perform_indexing_incremental_success(self, mock_print):
         """Test successful incremental indexing operation."""
-        mock_time.side_effect = [1000.0, 1015.0]  # 15 second duration
-
         tool = ManualIndexingTool()
 
         # Mock discovery result
         mock_discovery = {"project_context": {"project_name": "test_project"}, "relevant_files": ["/test/file1.py"], "file_count": 1}
 
-        # Mock pipeline result
+        # Mock pipeline result - all attributes must be proper values (not MagicMock) for comparisons
         mock_result = MagicMock()
         mock_result.success = True
         mock_result.total_files_processed = 0  # No changes
@@ -275,6 +272,9 @@ class TestManualIndexingTool(unittest.TestCase):
         mock_result.total_points_stored = 0
         mock_result.collections_used = []
         mock_result.performance_metrics = {"memory_usage_mb": 128}
+        mock_result.embedding_failures = 0  # Integer for comparison
+        mock_result.embedding_success_rate = 100.0  # Float for formatting
+        mock_result.failed_chunks = []
 
         with (
             patch.object(tool.file_discovery, "discover_project_files") as mock_discover,
@@ -356,10 +356,14 @@ class TestManualIndexingTool(unittest.TestCase):
         mock_result.total_points_stored = 5
         mock_result.collections_used = ["test_collection"]
         mock_result.performance_metrics = {}
+        mock_result.embedding_failures = 0  # Set as integer for comparison
+        mock_result.embedding_success_rate = 100.0
 
         # Mock report with some errors to trigger saving
         mock_report = MagicMock()
         mock_report.get_error_summary.return_value = {"syntax": 1}
+        mock_report.embedding_failures = 0  # Set as integer for comparison
+        mock_report.has_critical_errors.return_value = False
 
         with (
             patch.object(tool.file_discovery, "discover_project_files") as mock_discover,
