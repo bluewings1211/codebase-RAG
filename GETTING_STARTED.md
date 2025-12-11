@@ -13,7 +13,7 @@ Ensure you have the following installed:
 *   **uv** (Python package manager): [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 *   **Docker** (Recommended for Qdrant database)
 *   **Ollama** (For embedding models)
-*   **~2GB disk space** (For Qwen3-Reranker model, downloaded automatically on first search)
+*   **~640MB disk space** (For Qwen3-Reranker-0.6B model in Q8 quantization, downloaded automatically on first search)
 
 ### 2. Setup Script
 
