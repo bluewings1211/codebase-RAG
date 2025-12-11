@@ -539,7 +539,7 @@ class TestSearchDiagnostics:
         mock_client.scroll.return_value = (mock_points, None)
 
         # Test report generation
-        report = create_search_quality_report(qdrant_client=mock_client, collection_names=["test_collection"], test_queries=["test query"])
+        report = create_search_quality_report(qdrant_client=mock_client, collection_names=["test_collection"])
 
         assert "timestamp" in report
         assert "collections_analyzed" in report

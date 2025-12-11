@@ -771,14 +771,12 @@ def run_full_diagnostics(project_name: str | None = None) -> str:
 def create_search_quality_report(
     qdrant_client: QdrantClient | None = None,
     collection_names: list[str] | None = None,
-    test_queries: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a comprehensive search quality report.
 
     Args:
         qdrant_client: Optional Qdrant client instance
         collection_names: Optional list of collection names to analyze
-        test_queries: Optional list of test queries to run
 
     Returns:
         Dictionary containing search quality report
