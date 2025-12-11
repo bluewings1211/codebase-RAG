@@ -32,10 +32,17 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # Testing
     "pytest>=8.2.2,<9",
+    "pytest-cov>=4.1.0,<5",       # Coverage reporting
+    "pytest-xdist>=3.5.0,<4",     # Parallel test execution
+    # Linting & Formatting
     "pre-commit>=4.2.0,<5",
     "ruff>=0.12.1,<0.13",
     "black>=25.1.0,<26",
+    # RAG Quality Evaluation
+    "ragas>=0.2.0",               # RAG evaluation framework
+    "datasets>=2.18.0,<3",        # Required by RAGAS
 ]
 
 [tool.uv]
@@ -104,6 +111,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/services/indexing_service.py" = ["E501"]  # Allow long lines in logging statements
 "src/services/rag_search_strategy.py" = ["E501"]  # Allow long lines in data structure formatting
 "src/utils/prompt_*.py" = ["BLE001"]  # Allow bare except in utility modules
+"src/services/indexing_reporter.py" = ["T201"]  # Allow print for progress reporting
 
 [tool.ruff.format]
 # Use double quotes for strings.
@@ -116,3 +124,46 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 # Enable docstring code formatting
 docstring-code-format = true
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+[tool.pytest.ini_options]
+# Test discovery paths
+testpaths = ["src/tests"]
+
+# Default command line options
+# -v: verbose output
+# --tb=short: shorter traceback format
+# -ra: show extra test summary for all except passed
+addopts = "-v --tb=short -ra"
+
+# Marker definitions for test categorization
+markers = [
+    "slow: marks tests as slow running (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests requiring external services (Qdrant, Ollama)",
+    "rag_quality: marks tests as RAG quality evaluation tests",
+    "requires_qdrant: marks tests that require Qdrant database connection",
+    "requires_ollama: marks tests that require Ollama service for embeddings/LLM",
+    "requires_reranker: marks tests that require reranker model to be loaded",
+    "unit: marks tests as fast unit tests with no external dependencies",
+    "smoke: marks tests as basic smoke tests for quick validation",
+]
+
+# Warning filters
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# Minimum Python version for tests
+minversion = "8.0"
+
+# Strict marker enforcement (fail on unknown markers)
+# Note: In pytest 8.x, use --strict-markers flag instead
+# strict_markers = true
+
+# Test collection settings
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
