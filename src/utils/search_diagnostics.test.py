@@ -393,7 +393,6 @@ class TestCreateSearchQualityReport:
         """Test successful search quality report creation."""
         mock_client = Mock()
         collection_names = ["collection1", "collection2"]
-        test_queries = ["query1", "query2"]
 
         # Mock collection info
         mock_collection_info = Mock()
@@ -422,7 +421,7 @@ class TestCreateSearchQualityReport:
         mock_client.get_collections.return_value = Mock(collections=mock_collections)
 
         with patch("utils.search_diagnostics.logger") as mock_logger:
-            report = create_search_quality_report(qdrant_client=mock_client, collection_names=collection_names, test_queries=test_queries)
+            report = create_search_quality_report(qdrant_client=mock_client, collection_names=collection_names)
 
         # Verify report structure
         assert "timestamp" in report
@@ -457,8 +456,8 @@ class TestCreateSearchQualityReport:
         # Verify logging
         mock_logger.info.assert_called()
 
-    def test_create_search_quality_report_with_default_queries(self):
-        """Test report creation with default test queries."""
+    def test_create_search_quality_report_with_minimal_params(self):
+        """Test report creation with minimal parameters."""
         mock_client = Mock()
         collection_names = ["test_collection"]
 
@@ -474,7 +473,6 @@ class TestCreateSearchQualityReport:
         report = create_search_quality_report(
             qdrant_client=mock_client,
             collection_names=collection_names,
-            # test_queries not provided - should use defaults
         )
 
         assert "timestamp" in report

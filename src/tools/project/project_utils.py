@@ -368,26 +368,14 @@ def get_available_project_names(collections: list[str]) -> list[str]:
         if collection.endswith("_file_metadata"):
             continue
 
-        if collection.startswith("project_"):
-            # Extract project name from "project_{name}_{type}"
-            # Handle multi-part project names like "project_PocketFlow_Template_Python_code"
+        if collection.startswith(("project_", "dir_")):
+            # Extract project name from "project_{name}_{type}" or "dir_{name}_{type}"
+            # Handle multi-part names like "project_PocketFlow_Template_Python_code"
             parts = collection.split("_")
-            if len(parts) >= 3:
-                # Check if the last part is a known collection type
-                if parts[-1] in collection_type_suffixes:
-                    # Everything between 'project_' and the last '_type' is the project name
-                    project_name = "_".join(parts[1:-1])
-                    project_names.add(project_name)
-        elif collection.startswith("dir_"):
-            # Extract directory name from "dir_{name}_{type}"
-            # Handle multi-part directory names like "dir_My_Project_Name_code"
-            parts = collection.split("_")
-            if len(parts) >= 3:
-                # Check if the last part is a known collection type
-                if parts[-1] in collection_type_suffixes:
-                    # Everything between 'dir_' and the last '_type' is the directory name
-                    dir_name = "_".join(parts[1:-1])
-                    project_names.add(dir_name)
+            if len(parts) >= 3 and parts[-1] in collection_type_suffixes:
+                # Everything between the prefix and the last '_type' is the project name
+                project_name = "_".join(parts[1:-1])
+                project_names.add(project_name)
 
     return sorted(project_names)
 
